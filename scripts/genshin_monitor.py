@@ -1,236 +1,280 @@
-import urllib.request, gzip, re, json, os, hashlib
+#!/usr/bin/env python3
+"""
+Мониторинг FunPay — аккаунты Genshin Impact.
 
-EUR_TO_RUB = 105
-# Используем путь относительно скрипта для Windows/Linux совместимости
+Фильтрация:
+- строго сервер Европа;
+- все цены приводятся в рубли (USD/EUR → RUB);
+- отсечка по ценам: cat1 (AR 50-60): 50-3000₽, cat2 (AR 0-20): 50-700₽;
+- пропускаем "нероллы" (data-f-type="Нероленный");
+- пропускаем мусор (договорная/под заказ/фарм/услуги);
+- cat2 требует хотя бы одного ивентового 5★ в описании;
+- пропускаем "только стандартные 5★" (без ивентовых).
+
+Модуль импортируется из monitor_all.py; запускается и отдельно.
+"""
+from __future__ import annotations
+
+import os
+import re
+import sys
+from typing import Any
+
+# Когда запускаем отдельно — делаем возможным импорт common.py.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from common import (  # noqa: E402
+    CAT1_AR_MAX,
+    CAT1_AR_MIN,
+    CAT1_MAX_PRICE,
+    CAT1_MIN_PRICE,
+    CAT2_AR_MAX,
+    CAT2_AR_MIN,
+    CAT2_MAX_PRICE,
+    CAT2_MIN_PRICE,
+    fetch,
+    has_event_5star,
+    has_standard_5star,
+    is_europe,
+    is_garbage,
+    load_seen,
+    price_to_rub,
+    save_seen,
+    update_seen,
+)
+
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "genshin_seen.json")
+FUNPAY_URL = "https://funpay.com/lots/696/"
 
-# Стандартные 5★ (постоянный баннер, актуально на 5.4+)
-STANDARD_5STAR = {
-    "дилюк", "diluc", "джинн", "jean", "кэ цин", "кэцин", "ке цин", "кецин", "keqing",
-    "мона", "mona", "цици", "ци ци", "qiqi", "тигнари", "tighnari",
-    "дехья", "dehya", "амбер", "amber", "мидзуки", "midzuki", "мидуки",
-}
 
-# Ивентовые (ограниченные) 5★ персонажи
-EVENT_5STAR = {
-    "венди", "венти", "venti", "эола", "еола", "eula", "кадзуха", "kazuha",
-    "чжун ли", "чжунли", "zhongli", "гань юй", "ганьюй", "ganyu", "сяо", "xiao",
-    "ху тао", "хутао", "hu tao", "йоимия", "ёимия", "yoimiya",
-    "шэнь хэ", "шэньхэ", "шень хэ", "шеньхэ", "shenhe", "янь фэй", "яньфэй", "yanfei",
-    "аяка", "ayaka", "камисато", "райдэн", "райден", "raiden",
-    "аято", "ayato", "итто", "itto", "кокоми", "kokomi",
-    "яэ мико", "яэмико", "ямико", "yae miko",
-    "нахида", "nahida", "нихида", "сайно", "cyno",
-    "вандерер", "wanderer", "скиталец", "странник", "альхаисам", "alhaitham",
-    "фурина", "furina", "нихида", "нёвиллет", "neuvillette", "невиллет",
-    "навия", "navia", "клоринда", "clorinde", "сигвин", "sigewinne",
-    "рисли", "wriothesley", "рёли", "линей", "lyney", "фремине", "freminet",
-    "муалани", "mualani", "кинич", "kinich", "часка", "chasca",
-    "мавуика", "mavuika", "ситлали", "citlali", "шилонен", "xilonen",
-    "арлекино", "arlecchino",
-    "тарталья", "tartaglia", "чайлд", "childe", "альбедо", "albedo",
-    "нилу", "nilou", "фарузан", "faruzan",
-    "эмилия", "emilie", "коломбина", "инеффа", "иннефа",
-    "эскоф", "эскофье", "лаум", "дурин",
-    "варка", "тиори", "chiori", "скирк",
-    "е лань", "елань", "ю лань", "yelan",
-    "шарлотта", "charlotte",
-}
+def parse_funpay(html: str | None = None) -> list[dict[str, Any]]:
+    """Распарсить ленту лотов FunPay. Возвращает список словарей."""
+    if html is None:
+        html = fetch(FUNPAY_URL)
+    if not html:
+        return []
 
-def should_skip_starter_only(desc):
-    """True = пропускать: только стандартные 5★, без ивентовых"""
-    t = desc.lower()
-    found_std = any(name in t for name in STANDARD_5STAR)
-    found_evt = any(name in t for name in EVENT_5STAR)
-    if found_evt:
-        return False
-    if found_std and not found_evt:
-        return True
-    return False
-
-def fetch(url, timeout=20):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Cache-Control': 'max-age=0',
-        'Upgrade-Insecure-Requests': '1',
-    }
-    try:
-        req = urllib.request.Request(url, headers=headers)
-        resp = urllib.request.urlopen(req, timeout=timeout)
-        data = resp.read()
-        if resp.headers.get('Content-Encoding') == 'gzip':
-            data = gzip.decompress(data)
-        elif resp.headers.get('Content-Encoding') == 'br':
-            try:
-                import brotli
-                data = brotli.decompress(data)
-            except ImportError: pass
-        return data.decode('utf-8', errors='replace')
-    except Exception as e:
-        print(f"Ошибка при запросе {url}: {e}")
-        return ""
-
-def load_seen():
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except: pass
-    return {}
-
-def save_seen(seen):
-    try:
-        with open(STATE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(seen, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"Ошибка сохранения состояния: {e}")
-
-def parse_funpay():
-    html = fetch('https://funpay.com/lots/696/')
-    if not html: return []
-    
-    # Более гибкий поиск элементов tc-item
-    items = re.findall(
-        r'<a\s+[^>]*href="(https://funpay\.com/lots/offer\?id=(\d+))"[^>]*>(.*?)</a>',
-        html, re.DOTALL
+    # data-f-* атрибуты лежат на внешнем <a class="tc-item" ...>.
+    # Лента — плоский список, вложенных <a> нет, поэтому ленивый (.*?)
+    # корректно ловит body.
+    pattern = re.compile(
+        r'<a\b([^>]*href="(https://funpay\.com/lots/offer\?id=(\d+))"[^>]*)>'
+        r"(.*?)</a>",
+        re.DOTALL,
     )
-    results = []
-    for url, item_id, body in items:
-        # Проверяем, что это именно лот (есть класс tc-item)
-        if 'tc-item' not in html[html.find(url)-100 : html.find(url)+500]: 
-            # Это может быть не совсем надежно, но обычно tc-item рядом
-            pass
+    results: list[dict[str, Any]] = []
+    for m in pattern.finditer(html):
+        attrs = m.group(1)
+        url = m.group(2)
+        item_id = m.group(3)
+        body = m.group(4)
+        full = attrs + " " + body  # data-f-* на внешнем теге
 
-        # Ранг приключений (AR)
-        ar_m = re.search(r'data-f-ar="(\d+)"', body)
+        ar_m = re.search(r'data-f-ar="(\d+)"', full)
         ar = int(ar_m.group(1)) if ar_m else None
-        if ar is None:
-            # Ищем в тексте: AR 50, 50 ранг, 50 rank
-            ar_m2 = re.search(r'(?:AR|ранг|rank|Ранг)\s*[:=]?\s*(\d+)', body, re.I)
-            ar = int(ar_m2.group(1)) if ar_m2 else None
-        
-        # Сервер
-        srv = re.findall(r'tc-server-inside[^>]*>([^<]+)', body)
-        server = srv[0].strip() if srv else ""
 
-        # Описание
-        desc = re.findall(r'tc-desc-text[^>]*>([^<]+)', body)
-        description = desc[0].replace('&nbsp;', ' ').strip() if desc else ""
+        type_m = re.search(r'data-f-type="([^"]*)"', full)
+        acc_type = (type_m.group(1) if type_m else "").strip().lower()
 
-        # Цена и валюта
+        mail_m = re.search(r'data-f-mail="([^"]*)"', full)
+        mail = mail_m.group(1) if mail_m else "?"
+
+        hero_m = re.search(r'data-f-hero="([^"]*)"', full)
+        hero = hero_m.group(1) if hero_m else "?"
+
+        srv_m = re.findall(r"tc-server-inside[^>]*>([^<]+)", body)
+        server = srv_m[0].strip() if srv_m else ""
+
+        desc_m = re.findall(r"tc-desc-text[^>]*>([^<]+)", body)
+        desc = (
+            desc_m[0].replace("&nbsp;", " ").strip().replace("\u00a0", " ")
+            if desc_m
+            else ""
+        )
+
         price_m = re.search(r'tc-price[^>]*>\s*<div>([^<]+)<', body)
         unit_m = re.search(r'<span class="unit">([^<]+)<', body)
         price_str = price_m.group(1).strip() if price_m else ""
         currency = unit_m.group(1).strip() if unit_m else ""
-
-        price_rub = None
+        price_num = None
         try:
-            # Убираем пробелы в цене (бывает "1 234")
-            p_val = price_str.replace(' ', '').replace(',', '.')
-            price_num = float(p_val)
-            if currency == '€': price_rub = price_num * EUR_TO_RUB
-            elif currency == '₽' or 'руб' in currency.lower(): price_rub = price_num
-            elif currency == '$': price_rub = price_num * 95
-        except: pass
+            price_num = float(price_str.replace("\u00a0", "").replace(" ", "").replace(",", "."))
+        except Exception:
+            pass
+        price_rub = price_to_rub(price_num, currency) if price_num is not None else None
 
-        # Почта и тип
-        mail_m = re.search(r'data-f-mail="([^"]*)"', body)
-        mail = mail_m.group(1) if mail_m else "?"
-        type_m = re.search(r'data-f-type="([^"]*)"', body)
-        acc_type = type_m.group(1) if type_m else ""
+        seller_m = re.findall(r"media-user-name[^>]*>\s*\n?\s*([^<]+)", body)
+        seller = seller_m[0].strip() if seller_m else "?"
 
         results.append({
-            'source': 'FunPay', 'id': item_id,
-            'ar': ar, 'server': server, 'desc': description,
-            'price_rub': price_rub, 'price_orig': f"{price_str} {currency}",
-            'mail': mail, 'type': acc_type, 'url': url
+            "source": "FunPay",
+            "id": item_id,
+            "ar": ar,
+            "type": acc_type,
+            "mail": mail,
+            "hero": hero,
+            "server": server,
+            "desc": desc,
+            "price_orig": f"{price_str} {currency}".strip(),
+            "price_rub": price_rub,
+            "seller": seller,
+            "url": url,
         })
     return results
 
 
-def filter_accounts(all_accounts):
-    cat1 = []
-    cat2 = []
-    for a in all_accounts:
-        ar = a.get('ar')
-        price = a.get('price_rub')
-        desc = a.get('desc', '')
+def _passes_common(a: dict[str, Any]) -> bool:
+    """Единые правила: Европа, не неролл, не мусор, цена в рублях известна."""
+    if not is_europe(a.get("server", "")):
+        return False
+    if a.get("type", "") in ("нероленный", "неролл"):
+        return False
+    if is_garbage(a.get("desc", "")):
+        return False
+    if a.get("price_rub") is None:
+        return False
+    return True
 
-        if ar and 50 <= ar <= 60 and price and price <= 3000:
+
+def categorize(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    cat1: list[dict[str, Any]] = []
+    cat2: list[dict[str, Any]] = []
+    for a in items:
+        if not _passes_common(a):
+            continue
+        ar = a.get("ar")
+        price = a.get("price_rub")
+        desc = a.get("desc", "")
+        if ar is None or price is None:
+            continue
+
+        if CAT1_AR_MIN <= ar <= CAT1_AR_MAX and CAT1_MIN_PRICE <= price <= CAT1_MAX_PRICE:
             cat1.append(a)
 
-        # Категория 2: стартёры до 750₽ (увеличили лимит, чтобы видеть аккаунты по $7-8)
-        if ar and ar <= 20 and price and price <= 750:
-            if price < 50:  # пропускаем мусор "под заказ" за 1₽
+        if CAT2_AR_MIN <= ar <= CAT2_AR_MAX and CAT2_MIN_PRICE <= price <= CAT2_MAX_PRICE:
+            # cat2: обязательно хотя бы один ивентовый 5★ в описании.
+            # Если описание вообще без имён 5★ — пропускаем (пользователь
+            # хочет именно ивентовые, а не "может быть").
+            if not has_event_5star(desc):
                 continue
-            if should_skip_starter_only(desc):
-                continue
+            # Дополнительная страховка: если ивентовый и стандартный вместе —
+            # показываем (это нормально). Если только стандартные — has_event_5star
+            # уже вернул False и мы сюда не зашли.
+            _ = has_standard_5star  # оставлено для читаемости
             cat2.append(a)
 
-    cat1.sort(key=lambda x: x['price_rub'] or 999999)
-    cat2.sort(key=lambda x: x['price_rub'] or 999999)
+    cat1.sort(key=lambda x: x.get("price_rub") or float("inf"))
+    cat2.sort(key=lambda x: x.get("price_rub") or float("inf"))
     return cat1, cat2
 
-import sys
 
-def safe_print(text):
-    try:
-        print(text)
-    except UnicodeEncodeError:
-        # Убираем символы, которые не пролазят в текущую кодировку консоли
-        print(text.encode(sys.stdout.encoding, errors='replace').decode(sys.stdout.encoding))
+def run(reset: bool = False) -> dict[str, Any]:
+    """
+    Запустить мониторинг FunPay и вернуть структурированный результат:
+      {
+        "source": "FunPay",
+        "total_raw": N,
+        "cat1": [...], "cat2": [...],
+        "new_cat1": [...], "new_cat2": [...],
+        "drop_cat1": [...], "drop_cat2": [...],
+        "first_run": bool,
+      }
+    """
+    html = fetch(FUNPAY_URL)
+    raw = parse_funpay(html)
+    cat1, cat2 = categorize(raw)
 
-def main():
-    all_accounts = []
-    try:
-        all_accounts.extend(parse_funpay())
-    except Exception as e:
-        safe_print(f"⚠ FunPay ошибка: {e}")
+    if reset and os.path.exists(STATE_FILE):
+        os.remove(STATE_FILE)
 
-    cat1, cat2 = filter_accounts(all_accounts)
-    seen = load_seen()
+    seen_before = load_seen(STATE_FILE)
+    # "Первый запуск" — если state ещё не существует или оба сегмента пусты.
+    # Иначе юзер получит 600+ "новых" на чистом state-файле.
+    first_run = (
+        not os.path.exists(STATE_FILE)
+        or (not seen_before.get("cat1") and not seen_before.get("cat2"))
+    )
 
-    new_cat1 = [a for a in cat1 if a['id'] not in seen.get('cat1', {})]
-    new_cat2 = [a for a in cat2 if a['id'] not in seen.get('cat2', {})]
+    seen = seen_before
+    new_cat1, drop_cat1 = update_seen(seen, "cat1", cat1)
+    new_cat2, drop_cat2 = update_seen(seen, "cat2", cat2)
+    save_seen(STATE_FILE, seen)
 
-    # Обновляем историю
-    seen.setdefault('cat1', {}).update({a['id']: a['price_rub'] for a in cat1})
-    seen.setdefault('cat2', {}).update({a['id']: a['price_rub'] for a in cat2})
-    save_seen(seen)
+    # На первом запуске ничего не показываем как "new" — слишком шумно.
+    if first_run:
+        new_cat1, new_cat2 = [], []
+        drop_cat1, drop_cat2 = [], []
 
-    output = []
-    if new_cat1:
-        output.append(f"🔥 FunPay: AR 50-60, до 3000₽ — {len(new_cat1)} новых:")
-        for i, a in enumerate(new_cat1[:20]):
-            rub = f"{a['price_rub']:.0f}₽" if a['price_rub'] else "?"
-            output.append(f"{i+1}. AR{a['ar']} | {rub} ({a['price_orig']}) | {a.get('server','')} | 📧{a.get('mail','')}")
-            output.append(f"   {a['desc'][:100]}")
-            output.append(f"   🔗 {a['url']}")
+    return {
+        "source": "FunPay",
+        "total_raw": len(raw),
+        "cat1": cat1,
+        "cat2": cat2,
+        "new_cat1": new_cat1,
+        "new_cat2": new_cat2,
+        "drop_cat1": drop_cat1,
+        "drop_cat2": drop_cat2,
+        "first_run": first_run,
+    }
+
+
+def _format_report(data: dict[str, Any]) -> str:
+    lines = ["--- FUNPAY MONITOR ---"]
+    if data["first_run"]:
+        lines.append(
+            f"[init] Первый запуск — сохранили {len(data['cat1'])} + {len(data['cat2'])} "
+            "лотов в seen. Новые/подешевевшие покажутся со следующего запуска."
+        )
     else:
-        output.append("🔥 FunPay: новых нет")
+        for cat_key, title, cat in (
+            ("cat1", f"AR {CAT1_AR_MIN}-{CAT1_AR_MAX}, {int(CAT1_MIN_PRICE)}-{int(CAT1_MAX_PRICE)}₽, Европа", data["cat1"]),
+            ("cat2", f"AR {CAT2_AR_MIN}-{CAT2_AR_MAX}, {int(CAT2_MIN_PRICE)}-{int(CAT2_MAX_PRICE)}₽, Европа, с ивентовыми 5★", data["cat2"]),
+        ):
+            new_items = data[f"new_{cat_key}"]
+            drops = data[f"drop_{cat_key}"]
+            lines.append(f"\n🔎 {title} — всего {len(cat)}, новых {len(new_items)}, подешевевших {len(drops)}")
+            if new_items:
+                lines.append("  [NEW]")
+                for i, a in enumerate(new_items[:25]):
+                    lines.append(
+                        f"    {i+1}. AR{a['ar']} | {a['price_rub']:.0f}₽ ({a['price_orig']})"
+                        f" | 📧{a.get('mail','?')} | {a.get('server','?')}"
+                    )
+                    lines.append(f"       {a['desc'][:120]}")
+                    lines.append(f"       🔗 {a['url']}")
+            if drops:
+                lines.append("  [↓ цена упала]")
+                for i, a in enumerate(drops[:25]):
+                    lines.append(
+                        f"    {i+1}. AR{a['ar']} | {a['price_rub']:.0f}₽"
+                        f" (было {a['_prev_price']:.0f}₽, −{a['_drop_pct']}%)"
+                    )
+                    lines.append(f"       {a['desc'][:120]}")
+                    lines.append(f"       🔗 {a['url']}")
+            if not new_items and not drops:
+                lines.append("  ничего нового")
+    lines.append(
+        f"\n📊 Всего на FunPay (сырьё): {data['total_raw']}, "
+        f"в фильтрах: {len(data['cat1'])}+{len(data['cat2'])}"
+    )
+    return "\n".join(lines)
 
-    output.append("")
-    if new_cat2:
-        output.append(f"🌱 FunPay: AR≤20, до 750₽, с ивентовыми — {len(new_cat2)} новых:")
-        for i, a in enumerate(new_cat2[:20]):
-            rub = f"{a['price_rub']:.0f}₽" if a['price_rub'] else "?"
-            output.append(f"{i+1}. AR{a['ar']} | {rub} ({a['price_orig']})")
-            output.append(f"   {a['desc'][:100]}")
-            output.append(f"   🔗 {a['url']}")
-    else:
-        output.append("🌱 FunPay: новых нет")
 
-    output.append(f"\n📊 Всего на FunPay: {len(all_accounts)} лотов. В фильтрах: {len(cat1)}+{len(cat2)}")
-    safe_print("\n".join(output))
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    p = argparse.ArgumentParser(description="FunPay monitor — Genshin accounts")
+    p.add_argument("--reset", action="store_true", help="очистить seen и начать сначала")
+    args = p.parse_args(argv)
+
+    data = run(reset=args.reset)
+    print(_format_report(data))
+
 
 if __name__ == "__main__":
-    # Для Windows принудительно ставим UTF-8 если это возможно
     if sys.platform == "win32":
         try:
             import io
-            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-        except: pass
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+        except Exception:
+            pass
     main()
