@@ -1,179 +1,313 @@
 #!/usr/bin/env python3
 """
-Specialized PayGame Monitor for Genshin Impact
+Мониторинг PayGame — аккаунты Genshin Impact.
+
+Парсинг через Schema.org `application/ld+json` (ItemList) — устойчив
+к смене авто-генерируемых CSS-классов Next.js. Сервер берётся из HTML
+возле карточки (JSON-LD его не содержит).
+
+Фильтрация — та же, что для FunPay (см. genshin_monitor.py).
 """
-import urllib.request, gzip, re, json, os, hashlib, sys, io
+from __future__ import annotations
 
-EUR_TO_RUB = 105
+import json
+import os
+import re
+import sys
+from typing import Any
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from common import (  # noqa: E402
+    CAT1_AR_MAX,
+    CAT1_AR_MIN,
+    CAT1_MAX_PRICE,
+    CAT1_MIN_PRICE,
+    CAT2_AR_MAX,
+    CAT2_AR_MIN,
+    CAT2_MAX_PRICE,
+    CAT2_MIN_PRICE,
+    fetch,
+    has_event_5star,
+    is_europe,
+    is_garbage,
+    load_seen,
+    save_seen,
+    update_seen,
+)
+
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paygame_seen.json")
+PAYGAME_URL = "https://paygame.ru/games/genshin-impact/offers?type=account"
 
-# Стандартные 5★
-STANDARD_5STAR = {
-    "дилюк", "diluc", "джинн", "jean", "кэ цин", "кэцин", "ке цин", "кецин", "keqing",
-    "мона", "mona", "цици", "ци ци", "qiqi", "тигнари", "tighnari",
-    "дехья", "dehya", "амбер", "amber", "мидзуки", "midzuki", "мидуки",
-}
 
-# Ивентовые 5★
-EVENT_5STAR = {
-    "венди", "венти", "venti", "эола", "еола", "eula", "кадзуха", "kazuha",
-    "чжун ли", "чжунли", "zhongli", "гань юй", "ганьюй", "ganyu", "сяо", "xiao",
-    "ху тао", "хутао", "hu tao", "йоимия", "ёимия", "yoimiya",
-    "шэнь хэ", "шэньхэ", "шень хэ", "шеньхэ", "shenhe", "янь фэй", "яньфэй", "yanfei",
-    "аяка", "ayaka", "камисато", "райдэн", "райден", "raiden",
-    "аято", "ayato", "итто", "itto", "кокоми", "kokomi",
-    "яэ мико", "яэмико", "ямико", "yae miko",
-    "нахида", "nahida", "нихида", "сайно", "cyno",
-    "вандерер", "wanderer", "скиталец", "странник", "альхаисам", "alhaitham",
-    "фурина", "furina", "нихида", "нёвиллет", "neuvillette", "невиллет",
-    "навия", "navia", "клоринда", "clorinde", "сигвин", "sigewinne",
-    "рисли", "wriothesley", "рёли", "линей", "lyney", "фремине", "freminet",
-    "муалани", "mualani", "кинич", "kinich", "часка", "chasca",
-    "мавуика", "mavuika", "ситлали", "citlali", "шилонен", "xilonen",
-    "арлекино", "arlecchino",
-    "тарталья", "tartaglia", "чайлд", "childe", "альбедо", "albedo",
-    "нилу", "nilou", "фарузан", "faruzan",
-    "эмилия", "emilie", "коломбина", "инеффа", "иннефа",
-    "эскоф", "эскофье", "лаум", "дурин",
-    "варка", "тиори", "chiori", "скирк",
-    "е лань", "елань", "ю лань", "yelan",
-    "шарлотта", "charlotte",
-}
+# --- JSON-LD helpers ------------------------------------------------
+def _find_item_list(node: Any) -> dict[str, Any] | None:
+    if isinstance(node, dict):
+        if node.get("@type") == "ItemList":
+            return node
+        for v in node.values():
+            r = _find_item_list(v)
+            if r is not None:
+                return r
+    elif isinstance(node, list):
+        for v in node:
+            r = _find_item_list(v)
+            if r is not None:
+                return r
+    return None
 
-def should_skip_starter_only(desc):
-    t = desc.lower()
-    found_std = any(name in t for name in STANDARD_5STAR)
-    found_evt = any(name in t for name in EVENT_5STAR)
-    if found_evt: return False
-    if found_std and not found_evt: return True
-    return False
 
-def fetch(url, timeout=30):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Accept-Encoding': 'gzip, deflate, br',
-    }
-    try:
-        req = urllib.request.Request(url, headers=headers)
-        resp = urllib.request.urlopen(req, timeout=timeout)
-        data = resp.read()
-        if resp.headers.get('Content-Encoding') == 'gzip':
-            data = gzip.decompress(data)
-        return data.decode('utf-8', errors='replace')
-    except Exception as e:
-        print(f"Ошибка PayGame: {e}")
-        return ""
+def _parse_desc_attrs(description: str) -> dict[str, str]:
+    """
+    Из описания JSON-LD извлекаем хвост после "Аккаунты Genshin Impact." —
+    именно там лежат атрибуты вида "Ключ: значение; Ключ: значение".
+    """
+    m = re.search(r"Аккаунты Genshin Impact\.\s*(.*)$", description or "")
+    tail = m.group(1) if m else (description or "")
+    out: dict[str, str] = {}
+    for part in tail.split(";"):
+        if ":" in part:
+            k, _, v = part.partition(":")
+            out[k.strip()] = v.strip()
+    return out
 
-def load_seen():
-    if os.path.exists(STATE_FILE):
+
+def _server_from_html(html: str, offer_id: str) -> str:
+    """
+    Найти значок сервера в HTML рядом с `href="/offers/<id>"`.
+    Структура: `<span>Сервер<!-- -->:</span><span>Европа</span>`.
+
+    Важно: в HTML ссылка на оффер встречается несколько раз (JSON-LD,
+    schema.org Product, и сама карточка). Нам нужна именно карточка —
+    ищем через `href="/offers/<id>"`.
+    """
+    idx = html.find(f'href="/offers/{offer_id}"')
+    if idx < 0:
+        # fallback на любую упоминание — маловероятно, но вдруг разметка сменилась
+        idx = html.find(f'/offers/{offer_id}')
+        if idx < 0:
+            return ""
+    ctx = html[idx: idx + 3000]
+    m = re.search(
+        r"Сервер(?:<!--[^>]*-->)?\s*:\s*</span>\s*<span[^>]*>([^<]+)</span>",
+        ctx,
+    )
+    if m:
+        return m.group(1).strip()
+    # fallback — просто найти слово
+    m2 = re.search(r"(Европа|Азия|Америка|США|EU|ASIA|AM)", ctx)
+    return m2.group(1) if m2 else ""
+
+
+def parse_paygame(html: str | None = None) -> list[dict[str, Any]]:
+    if html is None:
+        html = fetch(PAYGAME_URL)
+    if not html:
+        return []
+
+    # Все JSON-LD блоки, ищем среди них ItemList (вложенный в CollectionPage).
+    blocks = re.findall(
+        r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>',
+        html,
+        re.DOTALL,
+    )
+    items_meta: list[dict[str, Any]] = []
+    for b in blocks:
         try:
-            with open(STATE_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except: pass
-    return {}
+            parsed = json.loads(b)
+        except Exception:
+            continue
+        il = _find_item_list(parsed)
+        if il:
+            items_meta = il.get("itemListElement", []) or []
+            break
 
-def save_seen(seen):
-    try:
-        with open(STATE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(seen, f, ensure_ascii=False, indent=2)
-    except: pass
+    results: list[dict[str, Any]] = []
+    for entry in items_meta:
+        p = entry.get("item") or {}
+        url = p.get("url", "")
+        offer_id = url.rsplit("/", 1)[-1] if url else ""
+        if not offer_id:
+            continue
 
-def parse_paygame():
-    html = fetch('https://paygame.ru/games/genshin-impact/offers?type=account')
-    if not html: return []
-    
-    # Карта и ссылка
-    items = re.findall(r'<a\s+[^>]*href="([^"]+)"[^>]*class="[^"]*sc-17v71la-2[^"]*"[^>]*>(.*?)</a>', html, re.DOTALL)
-    
-    results = []
-    for href, body in items:
-        # Описание
-        desc_m = re.search(r'class="sc-17v71la-14[^"]*">([^<]+)</span>', body)
-        description = desc_m.group(1).strip() if desc_m else ""
-        
-        # Цена
-        price_m = re.search(r'class="sc-17v71la-17[^"]*">([^<]+)</span>', body)
-        price_str = price_m.group(1).strip() if price_m else ""
-        
-        # Ранг (AR)
-        ar_m = re.search(r'AR<!-- -->:</span><span[^>]*>(\d+)</span>', body)
-        ar = int(ar_m.group(1)) if ar_m else None
-        
-        # Продавец
-        seller_m = re.search(r'class="jvm2kw-22[^"]*"><span>([^<]+)</span>', body)
-        seller = seller_m.group(1).strip() if seller_m else "?"
-        
+        name = (p.get("name") or "").strip()
+        description = (p.get("description") or "").strip()
+        attrs = _parse_desc_attrs(description)
+
+        ar = None
+        ar_raw = attrs.get("AR", "")
+        m = re.search(r"(\d+)", ar_raw)
+        if m:
+            ar = int(m.group(1))
+        if ar is None:
+            # fallback — ищем в имени/описании
+            m = re.search(r"AR\s*[:\-]?\s*(\d+)", description, re.I)
+            if m:
+                ar = int(m.group(1))
+
+        offer = p.get("offers") or {}
+        price_val = offer.get("price")
+        currency = offer.get("priceCurrency", "RUB")
         price_rub = None
         try:
-            price_rub = float(price_str.replace('₽','').replace(' ','').replace(',','.'))
-        except: pass
-        
-        url = "https://paygame.ru" + href if href.startswith('/') else href
+            if price_val is not None and str(currency).upper() == "RUB":
+                price_rub = float(price_val)
+        except Exception:
+            pass
+
+        seller = ((offer.get("seller") or {}).get("name") or "").strip() or "?"
+        server = _server_from_html(html, offer_id)
+
+        # Объединяем name + description в полный текст для фильтров 5★.
+        full_text = f"{name}. {description}"
+
+        neroll = (attrs.get("Неролл", "").lower() == "да")
 
         results.append({
-            'source': 'PayGame', 'id': hashlib.md5(f"{description}{price_str}".encode()).hexdigest()[:10],
-            'ar': ar, 'server': '?', 'desc': description,
-            'price_rub': price_rub, 'price_orig': price_str,
-            'seller': seller, 'url': url
+            "source": "PayGame",
+            "id": offer_id,
+            "ar": ar,
+            "server": server,
+            "desc": name if name else description,
+            "desc_full": full_text,
+            "neroll": neroll,
+            "price_orig": f"{price_val} ₽" if price_val is not None else "",
+            "price_rub": price_rub,
+            "seller": seller,
+            "url": url,
         })
     return results
 
-def safe_print(text):
-    try:
-        print(text)
-    except UnicodeEncodeError:
-        print(text.encode(sys.stdout.encoding, errors='replace').decode(sys.stdout.encoding))
 
-def main():
-    all_accounts = parse_paygame()
-    
-    cat1 = []
-    cat2 = []
-    for a in all_accounts:
-        ar = a.get('ar')
-        price = a.get('price_rub')
-        desc = a.get('desc', '')
+def _passes_common(a: dict[str, Any]) -> bool:
+    if not is_europe(a.get("server", "")):
+        return False
+    if a.get("neroll"):
+        return False
+    if is_garbage(a.get("desc_full") or a.get("desc", "")):
+        return False
+    if a.get("price_rub") is None:
+        return False
+    return True
 
-        if ar and 50 <= ar <= 60 and price and price <= 3000:
+
+def categorize(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    cat1: list[dict[str, Any]] = []
+    cat2: list[dict[str, Any]] = []
+    for a in items:
+        if not _passes_common(a):
+            continue
+        ar = a.get("ar")
+        price = a.get("price_rub")
+        if ar is None or price is None:
+            continue
+
+        if CAT1_AR_MIN <= ar <= CAT1_AR_MAX and CAT1_MIN_PRICE <= price <= CAT1_MAX_PRICE:
             cat1.append(a)
 
-        if ar and ar <= 20 and price and price <= 750:
-            if price < 50 or should_skip_starter_only(desc): continue
+        if CAT2_AR_MIN <= ar <= CAT2_AR_MAX and CAT2_MIN_PRICE <= price <= CAT2_MAX_PRICE:
+            text = a.get("desc_full") or a.get("desc", "")
+            if not has_event_5star(text):
+                continue
             cat2.append(a)
 
-    seen = load_seen()
-    new_cat1 = [a for a in cat1 if a['id'] not in seen.get('cat1', {})]
-    new_cat2 = [a for a in cat2 if a['id'] not in seen.get('cat2', {})]
+    cat1.sort(key=lambda x: x.get("price_rub") or float("inf"))
+    cat2.sort(key=lambda x: x.get("price_rub") or float("inf"))
+    return cat1, cat2
 
-    seen.setdefault('cat1', {}).update({a['id']: a['price_rub'] for a in cat1})
-    seen.setdefault('cat2', {}).update({a['id']: a['price_rub'] for a in cat2})
-    save_seen(seen)
 
-    output = ["--- PAYGAME MONITOR ---"]
-    if new_cat1:
-        output.append(f"🔥 AR 50-60, до 3000₽ — {len(new_cat1)} новых:")
-        for i, a in enumerate(new_cat1[:15]):
-            output.append(f"{i+1}. AR{a['ar']} | {a['price_orig']} | 👤 {a['seller']}\n   {a['desc'][:100]}\n   🔗 {a['url']}")
+def run(reset: bool = False) -> dict[str, Any]:
+    raw = parse_paygame()
+    cat1, cat2 = categorize(raw)
+
+    if reset and os.path.exists(STATE_FILE):
+        os.remove(STATE_FILE)
+
+    seen_before = load_seen(STATE_FILE)
+    first_run = (
+        not os.path.exists(STATE_FILE)
+        or (not seen_before.get("cat1") and not seen_before.get("cat2"))
+    )
+
+    seen = seen_before
+    new_cat1, drop_cat1 = update_seen(seen, "cat1", cat1)
+    new_cat2, drop_cat2 = update_seen(seen, "cat2", cat2)
+    save_seen(STATE_FILE, seen)
+
+    if first_run:
+        new_cat1, new_cat2 = [], []
+        drop_cat1, drop_cat2 = [], []
+
+    return {
+        "source": "PayGame",
+        "total_raw": len(raw),
+        "cat1": cat1,
+        "cat2": cat2,
+        "new_cat1": new_cat1,
+        "new_cat2": new_cat2,
+        "drop_cat1": drop_cat1,
+        "drop_cat2": drop_cat2,
+        "first_run": first_run,
+    }
+
+
+def _format_report(data: dict[str, Any]) -> str:
+    lines = ["--- PAYGAME MONITOR ---"]
+    if data["first_run"]:
+        lines.append(
+            f"[init] Первый запуск — сохранили {len(data['cat1'])} + {len(data['cat2'])} "
+            "лотов в seen. Новые/подешевевшие покажутся со следующего запуска."
+        )
     else:
-        output.append("🔥 AR 50-60 — новых нет")
+        for cat_key, title, cat in (
+            ("cat1", f"AR {CAT1_AR_MIN}-{CAT1_AR_MAX}, {int(CAT1_MIN_PRICE)}-{int(CAT1_MAX_PRICE)}₽, Европа", data["cat1"]),
+            ("cat2", f"AR {CAT2_AR_MIN}-{CAT2_AR_MAX}, {int(CAT2_MIN_PRICE)}-{int(CAT2_MAX_PRICE)}₽, Европа, с ивентовыми 5★", data["cat2"]),
+        ):
+            new_items = data[f"new_{cat_key}"]
+            drops = data[f"drop_{cat_key}"]
+            lines.append(f"\n🔎 {title} — всего {len(cat)}, новых {len(new_items)}, подешевевших {len(drops)}")
+            if new_items:
+                lines.append("  [NEW]")
+                for i, a in enumerate(new_items[:25]):
+                    lines.append(
+                        f"    {i+1}. AR{a['ar']} | {a['price_rub']:.0f}₽ | "
+                        f"👤 {a.get('seller','?')} | {a.get('server','?')}"
+                    )
+                    lines.append(f"       {a['desc'][:120]}")
+                    lines.append(f"       🔗 {a['url']}")
+            if drops:
+                lines.append("  [↓ цена упала]")
+                for i, a in enumerate(drops[:25]):
+                    lines.append(
+                        f"    {i+1}. AR{a['ar']} | {a['price_rub']:.0f}₽"
+                        f" (было {a['_prev_price']:.0f}₽, −{a['_drop_pct']}%)"
+                    )
+                    lines.append(f"       {a['desc'][:120]}")
+                    lines.append(f"       🔗 {a['url']}")
+            if not new_items and not drops:
+                lines.append("  ничего нового")
+    lines.append(
+        f"\n📊 Всего на PayGame (сырьё): {data['total_raw']}, "
+        f"в фильтрах: {len(data['cat1'])}+{len(data['cat2'])}"
+    )
+    return "\n".join(lines)
 
-    output.append("")
-    if new_cat2:
-        output.append(f"🌱 AR≤20, до 750₽ — {len(new_cat2)} новых:")
-        for i, a in enumerate(new_cat2[:15]):
-            output.append(f"{i+1}. AR{a['ar']} | {a['price_orig']}\n   {a['desc'][:100]}\n   🔗 {a['url']}")
-    else:
-        output.append("🌱 AR≤20 — новых нет")
 
-    output.append(f"\n📊 Найдено на PayGame: {len(all_accounts)} лотов. Всего в фильтрах: {len(cat1)}+{len(cat2)}")
-    safe_print("\n".join(output))
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    p = argparse.ArgumentParser(description="PayGame monitor — Genshin accounts")
+    p.add_argument("--reset", action="store_true", help="очистить seen и начать сначала")
+    args = p.parse_args(argv)
+
+    data = run(reset=args.reset)
+    print(_format_report(data))
+
 
 if __name__ == "__main__":
     if sys.platform == "win32":
         try:
             import io
-            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-        except: pass
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+        except Exception:
+            pass
     main()
