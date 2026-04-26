@@ -257,6 +257,46 @@ class TestSeenStateMachine(unittest.TestCase):
         common.update_seen(seen, "cat1", [{"id": "a", "price_rub": 100.0}])
         self.assertEqual(len(seen["cat1"]["a"]["history"]), 1)
 
+    def test_disappeared_grace_one_run(self) -> None:
+        seen = {
+            "cat1": {"a": {"price": 100, "first_seen": 1, "last_seen": 1, "missed_runs": 0}},
+            "cat2": {},
+        }
+        sold = common.mark_disappeared(seen, "cat1", set())
+        # 1-й промах ≤ grace=1 → ничего не возвращаем, но missed_runs=1
+        self.assertEqual(sold, [])
+        self.assertEqual(seen["cat1"]["a"]["missed_runs"], 1)
+
+    def test_disappeared_after_two_misses(self) -> None:
+        seen = {
+            "cat1": {"a": {"price": 100, "first_seen": 1, "last_seen": 1, "missed_runs": 1}},
+            "cat2": {},
+        }
+        sold = common.mark_disappeared(seen, "cat1", set())
+        self.assertEqual(len(sold), 1)
+        self.assertEqual(sold[0]["id"], "a")
+        self.assertNotIn("a", seen["cat1"])  # удалён
+
+    def test_disappeared_resets_when_returns(self) -> None:
+        seen = {
+            "cat1": {"a": {"price": 100, "first_seen": 1, "last_seen": 1, "missed_runs": 1}},
+            "cat2": {},
+        }
+        sold = common.mark_disappeared(seen, "cat1", {"a"})
+        self.assertEqual(sold, [])
+        self.assertEqual(seen["cat1"]["a"]["missed_runs"], 0)
+
+    def test_disappeared_skips_when_source_failed(self) -> None:
+        seen = {
+            "cat1": {"a": {"price": 100, "first_seen": 1, "last_seen": 1, "missed_runs": 1}},
+            "cat2": {},
+        }
+        sold = common.mark_disappeared(seen, "cat1", set(), source_ok=False)
+        # Источник упал — счётчики и состав seen НЕ трогаем.
+        self.assertEqual(sold, [])
+        self.assertEqual(seen["cat1"]["a"]["missed_runs"], 1)
+        self.assertIn("a", seen["cat1"])
+
     def test_drop_includes_history(self) -> None:
         seen: dict = {"cat1": {}, "cat2": {}}
         common.update_seen(seen, "cat1", [{"id": "a", "price_rub": 1000.0}])

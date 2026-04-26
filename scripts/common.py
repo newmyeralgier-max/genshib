@@ -387,6 +387,47 @@ def update_seen(
     return new_items, drops
 
 
+def mark_disappeared(
+    seen: dict[str, dict[str, dict[str, Any]]],
+    cat: str,
+    fresh_ids: set[str],
+    *,
+    grace_misses: int = 1,
+    source_ok: bool = True,
+) -> list[dict[str, Any]]:
+    """
+    Гл. 8: «исчезли = продали».
+
+    Для каждого id в seen[cat]:
+    - если id в fresh_ids → сбросить missed_runs=0;
+    - иначе инкрементировать missed_runs. Если он превысил
+      grace_misses (по умолч. 1 — т.е. на 2-м промахе) → считаем
+      «лот ушёл» и удаляем из seen, возвращаем запись в список.
+
+    source_ok=False (например, источник вернул ошибку или 0 лотов)
+    → ничего не делаем: мы не уверены, что список реально пуст.
+    Возвращаем пустой список, missed_runs не трогаем.
+    """
+    if not source_ok:
+        return []
+    bucket = seen.setdefault(cat, {})
+    out: list[dict[str, Any]] = []
+    for iid in list(bucket.keys()):
+        rec = bucket[iid]
+        if not isinstance(rec, dict):
+            continue
+        if iid in fresh_ids:
+            if rec.get("missed_runs"):
+                rec["missed_runs"] = 0
+            continue
+        misses = int(rec.get("missed_runs", 0)) + 1
+        rec["missed_runs"] = misses
+        if misses > grace_misses:
+            out.append({"id": iid, **rec})
+            del bucket[iid]
+    return out
+
+
 def prune_seen(
     seen: dict[str, dict[str, dict[str, Any]]],
     ttl_seconds: int = SEEN_TTL_SECONDS,
@@ -447,4 +488,5 @@ __all__ = [
     "save_seen",
     "update_seen",
     "prune_seen",
+    "mark_disappeared",
 ]

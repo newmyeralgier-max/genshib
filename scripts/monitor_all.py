@@ -313,12 +313,36 @@ def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_a
             data["new_cat2"], data["drop_cat2"], len(data["cat2"]),
             ctx=section_ctx,
         ))
+
+        # Гл. 8: блок «🛒 Похоже на свежие продажи».
+        sold = (data.get("sold_cat1") or []) + (data.get("sold_cat2") or [])
+        if sold:
+            # Самые «горячие продажи» — те, что недолго провисели.
+            now_ts = int(time.time())
+            for s in sold:
+                fs = s.get("first_seen") or 0
+                ls = s.get("last_seen") or now_ts
+                s["_lifetime_h"] = max(0, (int(ls) - int(fs)) // 3600) if fs else None
+            sold.sort(key=lambda x: x.get("_lifetime_h") or 10**9)
+            lines.append("**🛒 Похоже на свежие продажи (исчезли из выдачи):**")
+            lines.append("")
+            for s in sold[:10]:
+                pid = s.get("id", "?")
+                p = s.get("price")
+                ps = f"{p:.0f}₽" if isinstance(p, (int, float)) else "?"
+                lh = s.get("_lifetime_h")
+                lh_s = f"висел ~{lh}ч" if lh is not None else "висел ?"
+                lines.append(f"- id {pid} · {ps} · {lh_s}")
+            lines.append("")
+
         meta = (
             f"> 📊 всего сырых лотов {data['total_raw']}, "
             f"прошло фильтры: {len(data['cat1'])}+{len(data['cat2'])}"
         )
         if data.get("rentals_filtered"):
             meta += f" · аренд отсеяно: {data['rentals_filtered']}"
+        if sold:
+            meta += f" · похоже-продали: {len(sold)}"
         if not data.get("ok", True):
             meta += " · ⚠️ источник вернул ошибку (данные неполные)"
         if data.get("pruned"):
@@ -408,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
     empty = {
         "source": "", "total_raw": 0, "cat1": [], "cat2": [],
         "new_cat1": [], "new_cat2": [], "drop_cat1": [], "drop_cat2": [],
+        "sold_cat1": [], "sold_cat2": [],
         "first_run": False, "ok": True,
     }
     fp_data = dict(empty)

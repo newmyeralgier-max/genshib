@@ -42,6 +42,7 @@ from common import (  # noqa: E402
     prune_seen,
     save_seen,
     update_seen,
+    mark_disappeared,
 )
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "genshin_seen.json")
@@ -216,6 +217,14 @@ def run(reset: bool = False) -> dict[str, Any]:
     pruned = prune_seen(seen)
     new_cat1, drop_cat1 = update_seen(seen, "cat1", cat1)
     new_cat2, drop_cat2 = update_seen(seen, "cat2", cat2)
+    # Гл. 8: «исчезли = продали». Считаем только если источник вернул
+    # осмысленный результат (иначе выпишем «продали» весь seen-файл
+    # при первой же ошибке FunPay).
+    src_ok = len(raw) > 0
+    fresh_c1 = {it["id"] for it in cat1 if it.get("id")}
+    fresh_c2 = {it["id"] for it in cat2 if it.get("id")}
+    sold_c1 = mark_disappeared(seen, "cat1", fresh_c1, source_ok=src_ok)
+    sold_c2 = mark_disappeared(seen, "cat2", fresh_c2, source_ok=src_ok)
     save_seen(STATE_FILE, seen)
 
     # На первом запуске ничего не показываем как "new" — слишком шумно.
@@ -231,6 +240,11 @@ def run(reset: bool = False) -> dict[str, Any]:
     drop_cat1.sort(key=lambda x: -float(x.get("_drop_pct", 0) or 0))
     drop_cat2.sort(key=lambda x: -float(x.get("_drop_pct", 0) or 0))
 
+    # На первом прогоне «продали» не показываем — это бывший v1/v2 seen,
+    # который впервые видит v3.
+    if first_run:
+        sold_c1, sold_c2 = [], []
+
     return {
         "source": "FunPay",
         "total_raw": len(raw),
@@ -240,6 +254,8 @@ def run(reset: bool = False) -> dict[str, Any]:
         "new_cat2": new_cat2,
         "drop_cat1": drop_cat1,
         "drop_cat2": drop_cat2,
+        "sold_cat1": sold_c1,
+        "sold_cat2": sold_c2,
         "first_run": first_run,
         "pruned": pruned,
         "ok": len(raw) > 0,

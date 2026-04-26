@@ -43,6 +43,7 @@ from common import (  # noqa: E402
     prune_seen,
     save_seen,
     update_seen,
+    mark_disappeared,
 )
 
 STATE_FILE = os.path.join(
@@ -285,6 +286,13 @@ def run(reset: bool = False) -> dict[str, Any]:
     pruned = prune_seen(seen)
     new_cat1, drop_cat1 = update_seen(seen, "cat1", cat1)
     new_cat2, drop_cat2 = update_seen(seen, "cat2", cat2)
+    # Гл. 8: «исчезли = продали». Осторожно: если пагинация
+    # PayGame дала сбой и лоты потерялись не по вине «продали» — скипаем.
+    src_ok = ok and len(raw_api) > 0
+    fresh_c1 = {it["id"] for it in cat1 if it.get("id")}
+    fresh_c2 = {it["id"] for it in cat2 if it.get("id")}
+    sold_c1 = mark_disappeared(seen, "cat1", fresh_c1, source_ok=src_ok)
+    sold_c2 = mark_disappeared(seen, "cat2", fresh_c2, source_ok=src_ok)
     save_seen(STATE_FILE, seen)
 
     if first_run:
@@ -303,6 +311,9 @@ def run(reset: bool = False) -> dict[str, Any]:
 
     rentals_filtered = sum(1 for a in raw if a.get("is_rental"))
 
+    if first_run:
+        sold_c1, sold_c2 = [], []
+
     return {
         "source": "PayGame",
         "total_raw": len(raw),
@@ -313,6 +324,8 @@ def run(reset: bool = False) -> dict[str, Any]:
         "new_cat2": new_cat2,
         "drop_cat1": drop_cat1,
         "drop_cat2": drop_cat2,
+        "sold_cat1": sold_c1,
+        "sold_cat2": sold_c2,
         "first_run": first_run,
         "pruned": pruned,
         "ok": ok and len(raw) > 0,
