@@ -36,6 +36,7 @@ from common import (  # noqa: E402
     CAT2_MIN_PRICE,
     fetch_json,
     has_event_5star,
+    is_blacklisted_seller,
     is_europe,
     is_garbage,
     load_seen,
@@ -198,6 +199,8 @@ def _passes_common(a: dict[str, Any]) -> bool:
     if a.get("neroll"):
         return False
     if is_garbage(a.get("desc_full") or a.get("desc", "")):
+        return False
+    if is_blacklisted_seller(a.get("seller")):
         return False
     if a.get("price_rub") is None:
         return False

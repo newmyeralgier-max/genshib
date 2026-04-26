@@ -116,7 +116,20 @@ class TestFilters(unittest.TestCase):
         self.assertTrue(common.is_garbage("торг уместен"))
         self.assertTrue(common.is_garbage("под заказ"))
         self.assertTrue(common.is_garbage("услуги по прокачке"))
+        # buy-side маскировка под продавца
+        self.assertTrue(common.is_garbage("🏵️Куплю ваш аккаунт!🏵️"))
+        self.assertTrue(common.is_garbage("выкуп аккаунтов дорого"))
+        self.assertTrue(common.is_garbage("скуплю акки гёнша"))
+        self.assertTrue(common.is_garbage("Обменяю на свой аккаунт"))
         self.assertFalse(common.is_garbage("Скирк, Ху Тао, AR60"))
+
+    def test_is_blacklisted_seller(self) -> None:
+        self.assertTrue(common.is_blacklisted_seller("AuraFarm"))
+        self.assertTrue(common.is_blacklisted_seller("aurafarm"))
+        self.assertTrue(common.is_blacklisted_seller("  AuraFarm  "))
+        self.assertFalse(common.is_blacklisted_seller("KillLaFlare"))
+        self.assertFalse(common.is_blacklisted_seller(""))
+        self.assertFalse(common.is_blacklisted_seller(None))
 
     def test_event_5star(self) -> None:
         self.assertTrue(common.has_event_5star("ХУ ТАО + Скирк + 6 легов"))
@@ -188,13 +201,20 @@ class TestCategorize(unittest.TestCase):
     def test_funpay_categorize_filters_garbage(self) -> None:
         items = [
             {"id": "1", "ar": 55, "type": "прокачанный", "server": "Европа",
-             "desc": "ДОГОВОРНАЯ ЦЕНА", "price_rub": 1500.0},
+             "desc": "ДОГОВОРНАЯ ЦЕНА", "price_rub": 1500.0, "seller": "x"},
             {"id": "2", "ar": 55, "type": "прокачанный", "server": "Европа",
-             "desc": "Скирк + Ху Тао", "price_rub": 1500.0},
+             "desc": "Скирк + Ху Тао", "price_rub": 1500.0, "seller": "x"},
             {"id": "3", "ar": 55, "type": "нероленный", "server": "Европа",
-             "desc": "ивент 6500", "price_rub": 1500.0},
+             "desc": "ивент 6500", "price_rub": 1500.0, "seller": "x"},
             {"id": "4", "ar": 55, "type": "прокачанный", "server": "Азия",
-             "desc": "ивент 6500", "price_rub": 1500.0},
+             "desc": "ивент 6500", "price_rub": 1500.0, "seller": "x"},
+            # buyer pretending to be seller
+            {"id": "5", "ar": 60, "type": "прокачанный", "server": "Европа",
+             "desc": "Куплю ваш аккаунт! Ниже рынка",
+             "price_rub": 367.0, "seller": "KillLaFlare"},
+            # blacklisted seller
+            {"id": "6", "ar": 55, "type": "прокачанный", "server": "Европа",
+             "desc": "Скирк + Ху Тао", "price_rub": 200.0, "seller": "AuraFarm"},
         ]
         c1, c2 = genshin_monitor.categorize(items)
         ids = {i["id"] for i in c1}
