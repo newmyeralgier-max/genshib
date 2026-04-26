@@ -85,3 +85,78 @@ def similar(left: dict[str, Any], right: dict[str, Any], *, min_jaccard: float =
     if min(len(cl), len(cr)) == 0:
         return False
     return jaccard(cl, cr) >= min_jaccard
+
+
+# --- Глава 2: медианы по классу лота + discount_pct ----------------
+
+# Кап «насыщенности» по числу ивентовых 5★. Лоты с ≥4 5★ кладём в один
+# класс, иначе хвост распадается на классы с 1-2 наблюдениями.
+_MAX_EVENT_5_BUCKET = 4
+
+# Минимум наблюдений в классе, чтобы доверять медиане. Меньше — NULL.
+DEFAULT_MIN_SAMPLE = 5
+
+
+def market_class(item: dict[str, Any]) -> tuple[int | None, int]:
+    """
+    «Класс лота» для подсчёта медианы рынка: (ar_bucket, n_event_capped).
+    Лоты без AR попадают в класс (None, n) — у них своя медиана.
+    """
+    bucket, _, n = fingerprint(item)
+    return bucket, min(n, _MAX_EVENT_5_BUCKET)
+
+
+def fp_median_by_class(
+    fp_items: list[dict[str, Any]],
+    *,
+    min_sample: int = DEFAULT_MIN_SAMPLE,
+) -> dict[tuple[int | None, int], float]:
+    """
+    Медиана FunPay-цены по классу лота (см. market_class).
+
+    Считаем именно по FunPay, потому что FunPay — это та цена, по
+    которой лот **продаётся**, и она есть baseline арбитражной
+    наценки. Считать медиану по объединению источников некорректно
+    (мы и так знаем, что PayGame дешевле).
+
+    Классы с числом наблюдений < min_sample выкидываем — медиана по
+    1-2 точкам не информативна.
+    """
+    from statistics import median
+    buckets: dict[tuple[int | None, int], list[float]] = {}
+    for it in fp_items:
+        price = it.get("price_rub")
+        if price is None:
+            continue
+        try:
+            p = float(price)
+        except (TypeError, ValueError):
+            continue
+        cls = market_class(it)
+        buckets.setdefault(cls, []).append(p)
+    return {k: float(median(v)) for k, v in buckets.items() if len(v) >= min_sample}
+
+
+def discount_pct(
+    item: dict[str, Any],
+    medians: dict[tuple[int | None, int], float],
+) -> float | None:
+    """
+    Скидка лота относительно медианы своего класса, в процентах.
+    Положительное число — лот дешевле медианы, отрицательное — дороже.
+
+    Возвращает None, если медианы для класса нет (мало сэмплов) или у
+    лота нет цены.
+    """
+    cls = market_class(item)
+    m = medians.get(cls)
+    if m is None or m <= 0:
+        return None
+    price = item.get("price_rub")
+    if price is None:
+        return None
+    try:
+        p = float(price)
+    except (TypeError, ValueError):
+        return None
+    return round((1 - p / m) * 100, 1)
