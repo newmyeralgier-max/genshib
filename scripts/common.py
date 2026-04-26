@@ -244,12 +244,16 @@ def fetch_json(url: str, timeout: int = 30, *, retries: int = 2) -> Any:
 
 
 # --- seen state -----------------------------------------------------
-# Новый формат:
-#   {"cat1": {"id": {"price": 123.0, "first_seen": 17..., "last_seen": 17...}},
-#    "cat2": {...}}
-# Старый формат (обратная совместимость):
-#   {"cat1": {"id": 123.0}, "cat2": {...}}
+# Поддерживаем три формата seen-файла, читаются прозрачно:
+#   v1 (legacy):      {"cat1": {"id": 123.0}, "cat2": {...}}
+#   v2:               {"cat1": {"id": {"price": 123.0, "first_seen": 17..., "last_seen": 17...}}, ...}
+#   v3 (текущий):     то же что v2 + опц. поле "history": [{"ts": 17..., "price": 123.0}, ...]
+# Запись всегда производится в формате v3.
 SEEN_TTL_SECONDS = int(os.environ.get("GENSHIB_SEEN_TTL", str(14 * 24 * 3600)))
+
+# Кап на длину истории. Не хочу, чтобы seen.json пухло на 1 МБ за месяц
+# при 1000+ лотов.
+SEEN_HISTORY_MAX = int(os.environ.get("GENSHIB_HISTORY_MAX", "50"))
 
 
 def load_seen(path: str) -> dict[str, dict[str, dict[str, Any]]]:
@@ -266,17 +270,36 @@ def load_seen(path: str) -> dict[str, dict[str, dict[str, Any]]]:
         src = raw.get(cat, {}) or {}
         for k, v in src.items():
             if isinstance(v, dict):
-                out[cat][k] = {
+                rec: dict[str, Any] = {
                     "price": v.get("price"),
                     "first_seen": v.get("first_seen"),
                     "last_seen": v.get("last_seen"),
                 }
+                # v2 → v3: если history нет, инициализируем её одной
+                # точкой по last_seen. Это не идеально (мы не знаем
+                # промежуточных цен), но даёт корректный «нижний край»
+                # тренда от которого пойдут будущие точки.
+                hist = v.get("history")
+                if isinstance(hist, list):
+                    rec["history"] = [
+                        x for x in hist
+                        if isinstance(x, dict)
+                        and isinstance(x.get("ts"), int)
+                    ][-SEEN_HISTORY_MAX:]
+                elif rec.get("price") is not None and rec.get("last_seen") is not None:
+                    rec["history"] = [
+                        {"ts": int(rec["last_seen"]), "price": rec["price"]}
+                    ]
+                else:
+                    rec["history"] = []
+                out[cat][k] = rec
             else:
-                # legacy: было просто число-цена
+                # v1: было просто число-цена — никакой истории, никаких ts.
                 out[cat][k] = {
                     "price": v,
                     "first_seen": None,
                     "last_seen": None,
+                    "history": [],
                 }
     return out
 
@@ -317,7 +340,15 @@ def update_seen(
         price = it.get("price_rub")
         prev = bucket.get(iid)
         if prev is None:
-            bucket[iid] = {"price": price, "first_seen": now, "last_seen": now}
+            history: list[dict[str, Any]] = []
+            if price is not None:
+                history.append({"ts": now, "price": price})
+            bucket[iid] = {
+                "price": price,
+                "first_seen": now,
+                "last_seen": now,
+                "history": history,
+            }
             it2 = dict(it)
             it2["_first_seen_ts"] = now
             new_items.append(it2)
@@ -334,10 +365,22 @@ def update_seen(
                 it2["_drop_pct"] = round(
                     (1 - price / float(prev_price)) * 100.0, 1
                 )
+                # Прокидываем накопленную историю — пригодится в отчёте.
+                hist_copy = list(prev.get("history") or [])
+                if hist_copy:
+                    it2["_history"] = hist_copy
                 drops.append(it2)
             # цену обновляем только если она известна
             if price is not None:
                 prev["price"] = price
+                # дописать в history, если цена реально изменилась
+                hist = prev.setdefault("history", [])
+                last = hist[-1] if hist else None
+                if last is None or last.get("price") != price:
+                    hist.append({"ts": now, "price": price})
+                    if len(hist) > SEEN_HISTORY_MAX:
+                        # обрезаем по краю — самые старые точки уходят
+                        del hist[: len(hist) - SEEN_HISTORY_MAX]
             prev["last_seen"] = now
             if prev.get("first_seen") is None:
                 prev["first_seen"] = now

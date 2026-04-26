@@ -221,8 +221,49 @@ class TestSeenStateMachine(unittest.TestCase):
             seen = common.load_seen(path)
             self.assertEqual(seen["cat1"]["x"]["price"], 123.0)
             self.assertIsNone(seen["cat1"]["x"]["first_seen"])
+            self.assertEqual(seen["cat1"]["x"]["history"], [])
         finally:
             os.unlink(path)
+
+    def test_v2_to_v3_history_initialized(self) -> None:
+        # v2: dict с price/first/last, без history → history добивается одной точкой.
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as f:
+            json.dump({
+                "cat1": {"x": {"price": 200, "first_seen": 100, "last_seen": 200}},
+                "cat2": {},
+            }, f)
+            path = f.name
+        try:
+            seen = common.load_seen(path)
+            hist = seen["cat1"]["x"]["history"]
+            self.assertEqual(hist, [{"ts": 200, "price": 200}])
+        finally:
+            os.unlink(path)
+
+    def test_history_records_changes_and_caps(self) -> None:
+        # 60 апдейтов с разными ценами — history кап на 50.
+        seen: dict = {"cat1": {}, "cat2": {}}
+        for i in range(60):
+            common.update_seen(seen, "cat1", [{"id": "a", "price_rub": 100.0 + i}])
+        self.assertLessEqual(len(seen["cat1"]["a"]["history"]), 50)
+        # последняя точка должна соответствовать последней цене
+        self.assertEqual(seen["cat1"]["a"]["history"][-1]["price"], 100.0 + 59)
+
+    def test_history_no_duplicate_consecutive(self) -> None:
+        seen: dict = {"cat1": {}, "cat2": {}}
+        common.update_seen(seen, "cat1", [{"id": "a", "price_rub": 100.0}])
+        common.update_seen(seen, "cat1", [{"id": "a", "price_rub": 100.0}])
+        common.update_seen(seen, "cat1", [{"id": "a", "price_rub": 100.0}])
+        self.assertEqual(len(seen["cat1"]["a"]["history"]), 1)
+
+    def test_drop_includes_history(self) -> None:
+        seen: dict = {"cat1": {}, "cat2": {}}
+        common.update_seen(seen, "cat1", [{"id": "a", "price_rub": 1000.0}])
+        new, drops = common.update_seen(seen, "cat1", [{"id": "a", "price_rub": 700.0}])
+        self.assertEqual(len(drops), 1)
+        self.assertIn("_history", drops[0])
+        self.assertGreaterEqual(len(drops[0]["_history"]), 1)
 
 
 class TestCategorize(unittest.TestCase):

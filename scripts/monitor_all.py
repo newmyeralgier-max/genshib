@@ -104,6 +104,17 @@ def _fmt_item_md(
     if url:
         lines.append(f"  - {url}")
 
+    # Гл. 7: мини-тренд цены, если есть >=3 точки истории.
+    hist = a.get("_history") or []
+    if isinstance(hist, list) and len(hist) >= 3:
+        first = hist[0]
+        days = max(0, (int(time.time()) - int(first.get("ts", 0))) // 86400)
+        path = " → ".join(
+            f"{int(p['price'])}₽" for p in hist if isinstance(p.get("price"), (int, float))
+        )
+        if path and days > 0:
+            lines.append(f"  - 📈 за {days}д: {path}")
+
     # Гл. 1: «🔁 На <other> аналоги:».
     matches = (ctx or {}).get("matches") or {}
     sid = str(a.get("id") or "")
