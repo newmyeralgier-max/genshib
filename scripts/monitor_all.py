@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import genshin_monitor  # noqa: E402
 import paygame_monitor  # noqa: E402
+import match  # noqa: E402
 from common import (  # noqa: E402
     CAT1_AR_MAX,
     CAT1_AR_MIN,
@@ -29,6 +30,9 @@ from common import (  # noqa: E402
     CAT2_MAX_PRICE,
     CAT2_MIN_PRICE,
 )
+
+# Порог «горячего» лота для тега в .md.
+HOT_DISCOUNT_THRESHOLD = float(os.environ.get("GENSHIB_HOT_THRESHOLD", "30"))
 
 DEFAULT_REPORT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report.md")
 
@@ -48,7 +52,18 @@ def _fmt_ago(ts: int | None, now: int | None = None) -> str:
     return f"{delta // 86400}д назад"
 
 
-def _fmt_item_md(a: dict[str, Any], is_drop: bool = False) -> list[str]:
+def _fmt_item_md(
+    a: dict[str, Any],
+    is_drop: bool = False,
+    *,
+    ctx: dict[str, Any] | None = None,
+) -> list[str]:
+    """
+    Отрисовать один лот в Markdown. ctx (опц.):
+    - 'medians': dict[(ar_bucket, n_event), float] — медианы FunPay;
+    - 'matches': dict[id -> list[other_lot]] — встречные совпадения.
+    Если ctx нет — вывод базовый (без дисконта и без аналогов).
+    """
     ar = a.get("ar", "?")
     price = a.get("price_rub")
     price_s = f"{price:.0f}₽" if isinstance(price, (int, float)) else "?"
@@ -63,8 +78,17 @@ def _fmt_item_md(a: dict[str, Any], is_drop: bool = False) -> list[str]:
     desc_short = desc[:180]
     url = a.get("url", "")
     ago = _fmt_ago(a.get("_created_ts") or a.get("_first_seen_ts"))
+
+    # Гл. 2: тег «🔥 -X% от рынка» в начале строки.
+    medians = (ctx or {}).get("medians") or {}
+    disc_prefix = ""
+    if medians:
+        disc = match.discount_pct(a, medians)
+        if disc is not None and disc >= HOT_DISCOUNT_THRESHOLD:
+            disc_prefix = f"🔥 -{disc:.0f}% от рынка · "
+
     lines: list[str] = []
-    head = f"- **AR{ar}** · **{price_s}**{tag} · {source} · server: {server}"
+    head = f"- {disc_prefix}**AR{ar}** · **{price_s}**{tag} · {source} · server: {server}"
     if ago:
         head += f" · 🕒 {ago}"
     if mail:
@@ -75,10 +99,31 @@ def _fmt_item_md(a: dict[str, Any], is_drop: bool = False) -> list[str]:
         lines.append(f"  - {desc_short}")
     if url:
         lines.append(f"  - {url}")
+
+    # Гл. 1: «🔁 На <other> аналоги:».
+    matches = (ctx or {}).get("matches") or {}
+    sid = str(a.get("id") or "")
+    sims = matches.get(sid) or []
+    if sims:
+        other_label = "FunPay" if source != "FunPay" else "PayGame"
+        lines.append(f"  - 🔁 На {other_label} аналоги:")
+        for o in sims:
+            op = o.get("price_rub")
+            ops = f"{op:.0f}₽" if isinstance(op, (int, float)) else "?"
+            j = o.get("_jaccard", 0.0)
+            ourl = o.get("url") or ""
+            lines.append(f"    - {ops} — {ourl} (jaccard {j:.2f})")
     return lines
 
 
-def _section(title: str, new_items: list[dict[str, Any]], drops: list[dict[str, Any]], total_in_cat: int) -> list[str]:
+def _section(
+    title: str,
+    new_items: list[dict[str, Any]],
+    drops: list[dict[str, Any]],
+    total_in_cat: int,
+    *,
+    ctx: dict[str, Any] | None = None,
+) -> list[str]:
     lines: list[str] = []
     lines.append(f"### {title}")
     lines.append("")
@@ -92,13 +137,13 @@ def _section(title: str, new_items: list[dict[str, Any]], drops: list[dict[str, 
         lines.append("**🆕 Новые:**")
         lines.append("")
         for a in new_items:
-            lines.extend(_fmt_item_md(a))
+            lines.extend(_fmt_item_md(a, ctx=ctx))
         lines.append("")
     if drops:
         lines.append("**📉 Цена упала:**")
         lines.append("")
         for a in drops:
-            lines.extend(_fmt_item_md(a, is_drop=True))
+            lines.extend(_fmt_item_md(a, is_drop=True, ctx=ctx))
         lines.append("")
     if not new_items and not drops:
         lines.append("_ничего нового_")
@@ -106,7 +151,26 @@ def _section(title: str, new_items: list[dict[str, Any]], drops: list[dict[str, 
     return lines
 
 
+def _build_context(fp_data: dict[str, Any], pg_data: dict[str, Any]) -> dict[str, Any]:
+    """
+    Построить вспомогательный контекст для отчёта:
+    - medians: медианы FunPay по классу лота;
+    - matches_pg / matches_fp: словари id → [аналоги с другого источника].
+    """
+    fp_pool = (fp_data.get("cat1") or []) + (fp_data.get("cat2") or [])
+    pg_pool = (pg_data.get("cat1") or []) + (pg_data.get("cat2") or [])
+    medians = match.fp_median_by_class(fp_pool) if fp_pool else {}
+    matches_pg = match.build_matches(pg_pool, fp_pool) if fp_pool and pg_pool else {}
+    matches_fp = match.build_matches(fp_pool, pg_pool) if fp_pool and pg_pool else {}
+    return {
+        "medians": medians,
+        "matches_pg": matches_pg,
+        "matches_fp": matches_fp,
+    }
+
+
 def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_at: str) -> str:
+    ctx_full = _build_context(fp_data, pg_data)
     lines: list[str] = []
     lines.append("# Genshin Accounts Monitor")
     lines.append("")
@@ -135,13 +199,21 @@ def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_a
             )
             lines.append("")
             continue
+        # Какие matches подсунуть в ctx данной секции: для FunPay → PayGame-аналоги
+        # лежат в ctx_full["matches_fp"], и наоборот.
+        section_ctx = {
+            "medians": ctx_full["medians"],
+            "matches": ctx_full["matches_fp"] if label == "FunPay" else ctx_full["matches_pg"],
+        }
         lines.extend(_section(
             f"cat1: AR {CAT1_AR_MIN}-{CAT1_AR_MAX}, ≤ {int(CAT1_MAX_PRICE)}₽",
             data["new_cat1"], data["drop_cat1"], len(data["cat1"]),
+            ctx=section_ctx,
         ))
         lines.extend(_section(
             f"cat2: AR {CAT2_AR_MIN}-{CAT2_AR_MAX}, ≤ {int(CAT2_MAX_PRICE)}₽, только с ивентовыми 5★",
             data["new_cat2"], data["drop_cat2"], len(data["cat2"]),
+            ctx=section_ctx,
         ))
         meta = (
             f"> 📊 всего сырых лотов {data['total_raw']}, "

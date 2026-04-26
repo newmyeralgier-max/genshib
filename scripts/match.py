@@ -160,3 +160,61 @@ def discount_pct(
     except (TypeError, ValueError):
         return None
     return round((1 - p / m) * 100, 1)
+
+
+# --- Глава 1: кросс-сорс матчинг -----------------------------------
+
+def build_matches(
+    src: list[dict[str, Any]],
+    other: list[dict[str, Any]],
+    *,
+    top_k: int = 3,
+    min_jaccard: float = 0.5,
+) -> dict[str, list[dict[str, Any]]]:
+    """
+    Для каждого лота из `src` найти top_k самых похожих лотов в `other`.
+
+    Возвращает {src_id: [other_lot, ...]}.
+
+    Сортировка кандидатов: jaccard DESC, потом цена ASC (если price_rub
+    есть). Лот без AR-бакета или без ивентовых 5★ — не в `src` (просто
+    skip-аем такие).
+    """
+    if not src or not other:
+        return {}
+
+    # Индекс «по AR-бакету» — n×m → n×k (k мало внутри одного бакета).
+    by_bucket: dict[int | None, list[tuple[dict[str, Any], frozenset[str]]]] = {}
+    for o in other:
+        b, chars, n = fingerprint(o)
+        if b is None or n == 0:
+            continue
+        by_bucket.setdefault(b, []).append((o, chars))
+
+    out: dict[str, list[dict[str, Any]]] = {}
+    for s in src:
+        sid = str(s.get("id") or "")
+        if not sid:
+            continue
+        sb, schars, sn = fingerprint(s)
+        if sb is None or sn == 0:
+            continue
+        cands = by_bucket.get(sb) or []
+        scored: list[tuple[float, float, dict[str, Any]]] = []
+        for o, ochars in cands:
+            j = jaccard(schars, ochars)
+            if j < min_jaccard:
+                continue
+            price = o.get("price_rub")
+            try:
+                p = float(price) if price is not None else float("inf")
+            except (TypeError, ValueError):
+                p = float("inf")
+            scored.append((-j, p, o))
+        if not scored:
+            continue
+        scored.sort(key=lambda x: (x[0], x[1]))
+        out[sid] = [
+            {**o, "_jaccard": -score} for (score, _p, o) in scored[:top_k]
+        ]
+    return out

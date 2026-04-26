@@ -168,5 +168,53 @@ class TestMarketMedians(unittest.TestCase):
         self.assertIsNone(match.discount_pct(item, medians))
 
 
+class TestBuildMatches(unittest.TestCase):
+    def _lot(self, sid: str, ar: int, desc: str, price: float = 500) -> dict:
+        return {"id": sid, "ar": ar, "desc": desc, "price_rub": price}
+
+    def test_finds_top_k(self) -> None:
+        pg = [self._lot("p1", 55, "Скирк + Ху Тао", 200)]
+        fp = [
+            self._lot("f1", 55, "Скирк + Ху Тао", 700),     # j=1.0
+            self._lot("f2", 55, "Скирк + Фурина", 600),     # j=1/3
+            self._lot("f3", 55, "Скирк + Ху Тао + Аяка", 800),  # j=2/3
+            self._lot("f4", 50, "Скирк + Ху Тао", 500),     # diff bucket
+        ]
+        m = match.build_matches(pg, fp, top_k=3)
+        self.assertIn("p1", m)
+        ids = [x["id"] for x in m["p1"]]
+        # f1 (1.0), f3 (0.66) — f2 не пройдёт min_jaccard=0.5
+        self.assertEqual(ids[:2], ["f1", "f3"])
+
+    def test_sorts_by_jaccard_then_price(self) -> None:
+        pg = [self._lot("p1", 55, "Скирк + Ху Тао")]
+        fp = [
+            self._lot("f1", 55, "Скирк + Ху Тао", 1500),    # j=1.0
+            self._lot("f2", 55, "Скирк + Ху Тао", 700),     # j=1.0, дешевле
+        ]
+        m = match.build_matches(pg, fp, top_k=2)
+        # одинаковый jaccard → сначала дешёвый
+        self.assertEqual([x["id"] for x in m["p1"]], ["f2", "f1"])
+
+    def test_empty_inputs(self) -> None:
+        self.assertEqual(match.build_matches([], []), {})
+        self.assertEqual(
+            match.build_matches([self._lot("p1", 55, "Скирк")], []),
+            {},
+        )
+
+    def test_skips_lots_without_event_5(self) -> None:
+        pg = [self._lot("p1", 55, "Дилюк + Цици")]   # стандарт-only
+        fp = [self._lot("f1", 55, "Дилюк + Цици")]
+        m = match.build_matches(pg, fp)
+        self.assertEqual(m, {})
+
+    def test_records_jaccard_score(self) -> None:
+        pg = [self._lot("p1", 55, "Скирк + Ху Тао")]
+        fp = [self._lot("f1", 55, "Скирк + Ху Тао")]
+        m = match.build_matches(pg, fp)
+        self.assertEqual(m["p1"][0]["_jaccard"], 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
