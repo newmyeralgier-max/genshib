@@ -32,6 +32,34 @@ class TestFingerprint(unittest.TestCase):
         self.assertEqual(n, len(chars))
         self.assertGreaterEqual(n, 2)
 
+    def test_aliases_collapse_to_one_canonical(self) -> None:
+        """«Скирк (skirk)» — один герой, не два. То же для «Фурина = фурин»."""
+        b, chars, n = match.fingerprint({
+            "ar": 55, "desc": "Скирк (skirk) + Фурина (фурин) + ху тао — hu tao",
+        })
+        # три персонажа, не шесть
+        self.assertEqual(n, 3)
+        # каноникалы — первое имя в группе
+        self.assertIn("скирк", chars)
+        self.assertIn("фурина", chars)
+        self.assertIn("ху тао", chars)
+
+    def test_jaccard_consistent_across_languages(self) -> None:
+        """Лот «Skirk» и лот «Скирк» должны иметь jaccard=1.0."""
+        _, ca, _ = match.fingerprint({"ar": 55, "desc": "skirk"})
+        _, cb, _ = match.fingerprint({"ar": 55, "desc": "Скирк"})
+        self.assertEqual(match.jaccard(ca, cb), 1.0)
+
+    def test_ar_float_accepted(self) -> None:
+        """PayGame API мог бы прислать AR как float — не должны терять бакет."""
+        b, _, _ = match.fingerprint({"ar": 55.0, "desc": ""})
+        self.assertEqual(b, 55)
+
+    def test_ar_bool_rejected(self) -> None:
+        """bool — подкласс int. Никогда не должен превратиться в bucket=0."""
+        b, _, _ = match.fingerprint({"ar": True, "desc": ""})
+        self.assertEqual(b, None)
+
     def test_uses_desc_full_first(self) -> None:
         b, chars, _ = match.fingerprint({
             "ar": 55,

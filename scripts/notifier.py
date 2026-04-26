@@ -15,10 +15,17 @@ Telegram-нотификации (гл. 5).
 """
 from __future__ import annotations
 
+import json
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
+
+# Telegram максимум 4096 символов на сообщение. Берём с запасом — кириллица
+# в UTF-8 это 2 байта, и при формальном лимите длины строки до этого числа
+# редко доходит, но если кто-то задаст GENSHIB_TG_LIMIT=50 — режем.
+_TG_TEXT_LIMIT = 4000
 
 
 # Token + chat_id — обязательны в продакшене, но если не заданы —
@@ -114,7 +121,13 @@ def send(
         return False, "no items above min_discount"
 
     text = format_message(filtered, limit=limit)
-    api = f"https://api.telegram.org/bot{urllib.parse.quote(token, safe='')}/sendMessage"
+    # Жёсткий cap на длину, чтобы не словить 400 от Telegram.
+    if len(text) > _TG_TEXT_LIMIT:
+        text = text[: _TG_TEXT_LIMIT - 1] + "…"
+    # Token не URL-кодируем — у Telegram path-сегмент `bot<token>` принимает
+    # только сырые символы; квот лишнее (Telegram сам декодирует и тогда
+    # это работает, но мы ходим через urllib без encoding-bedrock прокси).
+    api = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = urllib.parse.urlencode({
         "chat_id": chat_id,
         "text": text,
@@ -129,8 +142,19 @@ def send(
         req = urllib.request.Request(api, data=payload, method="POST")
         with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
             body = resp.read().decode("utf-8", "replace")
-            ok = resp.status == 200 and '"ok":true' in body
+            try:
+                parsed = json.loads(body)
+                ok = bool(parsed.get("ok"))
+            except Exception:
+                ok = False
             return ok, f"http {resp.status}: {body[:200]}"
+    except urllib.error.HTTPError as e:  # type: ignore[name-defined]
+        # 400 = «can't parse entities» (баг экранирования) — важно увидеть body.
+        try:
+            body = e.read().decode("utf-8", "replace")
+        except Exception:
+            body = ""
+        return False, f"send error http {e.code}: {body[:200]}"
     except Exception as e:
         return False, f"send error: {e}"
 

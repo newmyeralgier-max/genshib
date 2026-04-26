@@ -26,33 +26,34 @@ import sys
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import EVENT_5STAR  # noqa: E402
+from common import EVENT_5STAR, EVENT_5STAR_CANONICAL  # noqa: E402
 
 # Тип отпечатка. ar_bucket=None для лотов с неизвестным AR.
 Fingerprint = tuple[int | None, frozenset[str], int]
 
 
 def fingerprint(item: dict[str, Any]) -> Fingerprint:
-    """Считать отпечаток одного лота. См. модуль-доку."""
+    """Считать отпечаток одного лота. См. модуль-доку.
+
+    Канонизация: каждый матч-алиас (e.g. «skirk», «фурин») заменяется на
+    каноническое имя своей группы из EVENT_5STAR_GROUPS. Это гарантирует,
+    что «Скирк (skirk)» и «Фурина = фурин» считаются одним персонажем
+    (а не двумя), что важно и для медиан, и для jaccard-сравнения.
+    """
     ar = item.get("ar")
     bucket: int | None = None
-    if isinstance(ar, int):
+    # bool — подкласс int, явно фильтруем.
+    if isinstance(ar, (int, float)) and not isinstance(ar, bool):
         # //5 * 5: 50→50, 51→50, 54→50, 55→55, 59→55, 60→60.
-        bucket = (ar // 5) * 5
+        bucket = (int(ar) // 5) * 5
 
     text = (item.get("desc_full") or item.get("desc") or "").lower()
-    raw = [name for name in EVENT_5STAR if name in text]
-    # Дедуп: если матч-имя X — собственный подстрочный кусок другого
-    # матч-имени Y (например, «фурин» внутри «фурина», «ке цин»
-    # внутри «ке цинн» и т.п.), оставляем только Y. Иначе один и
-    # тот же персонаж даёт +2 к множеству и портит jaccard.
-    raw_set = set(raw)
-    deduped: set[str] = set()
-    for x in raw_set:
-        if any(x != y and x in y for y in raw_set):
-            continue  # X — подстрока какого-то Y, X отбрасываем
-        deduped.add(x)
-    chars = frozenset(deduped)
+    canonicals = {
+        EVENT_5STAR_CANONICAL[name]
+        for name in EVENT_5STAR
+        if name in text
+    }
+    chars = frozenset(canonicals)
     return bucket, chars, len(chars)
 
 

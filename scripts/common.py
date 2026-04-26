@@ -41,32 +41,77 @@ STANDARD_5STAR = {
     "дехья", "dehya", "мидзуки", "midzuki", "мидуки",
 }
 
-EVENT_5STAR = {
-    "венди", "венти", "venti", "эола", "еола", "eula", "кадзуха", "kazuha",
-    "чжун ли", "чжунли", "zhongli", "гань юй", "ганьюй", "ganyu", "сяо", "xiao",
-    "ху тао", "хутао", "hu tao", "йоимия", "ёимия", "yoimiya",
-    "шэнь хэ", "шэньхэ", "шень хэ", "шеньхэ", "shenhe",
-    "аяка", "ayaka", "камисато", "райдэн", "райден", "raiden",
-    "аято", "ayato", "итто", "itto", "кокоми", "kokomi",
-    "яэ мико", "яэмико", "ямико", "yae miko",
-    "нахида", "nahida", "сайно", "cyno",
-    "вандерер", "wanderer", "скиталец", "странник", "альхаисам", "alhaitham",
-    "фурина", "furina", "фурин", "нёвиллет", "neuvillette", "невиллет",
-    "навия", "navia", "клоринда", "clorinde", "сигвин", "sigewinne",
-    "ризли", "рисли", "wriothesley", "линей", "lyney", "фремине", "freminet",
-    "муалани", "mualani", "кинич", "kinich", "часка", "chasca",
-    "мавуика", "mavuika", "ситлали", "citlali", "шилонен", "xilonen",
-    "арлекино", "arlecchino",
-    "тарталья", "tartaglia", "чайлд", "childe", "альбедо", "albedo",
-    "нилу", "nilou",
-    "эмилия", "emilie", "коломбина", "columbina", "инеффа", "иннефа",
-    "эскофье", "эскоф", "escoffier",
-    "тиори", "chiori", "скирк", "skirk",
-    "е лань", "елань", "yelan",
-    "линнея", "линея", "linnea",
-    "дурин", "durin",
-    "флинс", "flins",
-    "лаум", "laum",
+# --- Группы алиасов 5★ ивентов ----------------------------------------
+# Источник правды — список групп. Каждая группа = все известные написания
+# одного и того же персонажа (рус. русский транслит, англ.). Нужно для
+# fingerprint в match.py: если в описании встречаются два разных написания
+# одного персонажа («Скирк (skirk)»), мы должны считать это ОДНИМ героем,
+# а не двумя — иначе ломается медиана рынка и jaccard-сравнение лотов.
+#
+# Канонический вариант для каждой группы — первый элемент группы (обычно
+# короткое русское написание). Подмена на каноническое имя делается в
+# match.fingerprint().
+#
+# ВАЖНО: «камисато» намеренно не включаем — это фамилия, ambiguous между
+# Аякой и Аято; чтобы не выдать ложный +1 к составу.
+EVENT_5STAR_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("венти", "венди", "venti"),
+    ("эола", "еола", "eula"),
+    ("кадзуха", "kazuha"),
+    ("чжунли", "чжун ли", "zhongli"),
+    ("ганьюй", "гань юй", "ganyu"),
+    ("сяо", "xiao"),
+    ("ху тао", "хутао", "hu tao"),
+    ("йоимия", "ёимия", "yoimiya"),
+    ("шэньхэ", "шэнь хэ", "шень хэ", "шеньхэ", "shenhe"),
+    ("аяка", "ayaka"),
+    ("райден", "райдэн", "raiden"),
+    ("аято", "ayato"),
+    ("итто", "itto"),
+    ("кокоми", "kokomi"),
+    ("яэ мико", "яэмико", "ямико", "yae miko"),
+    ("нахида", "nahida"),
+    ("сайно", "cyno"),
+    ("вандерер", "wanderer", "скиталец", "странник"),
+    ("альхаитам", "альхаисам", "alhaitham"),
+    ("фурина", "furina", "фурин"),
+    ("нёвиллет", "neuvillette", "невиллет"),
+    ("навия", "navia"),
+    ("клоринда", "clorinde"),
+    ("сигвин", "sigewinne"),
+    ("ризли", "рисли", "wriothesley"),
+    ("линей", "lyney"),
+    ("фремине", "freminet"),
+    ("муалани", "mualani"),
+    ("кинич", "kinich"),
+    ("часка", "chasca"),
+    ("мавуика", "mavuika"),
+    ("ситлали", "citlali"),
+    ("шилонен", "xilonen"),
+    ("арлекино", "arlecchino"),
+    ("тарталья", "tartaglia", "чайлд", "childe"),
+    ("альбедо", "albedo"),
+    ("нилу", "nilou"),
+    ("эмилия", "emilie"),
+    ("коломбина", "columbina", "инеффа", "иннефа"),
+    ("эскофье", "эскоф", "escoffier"),
+    ("тиори", "chiori"),
+    ("скирк", "skirk"),
+    ("елань", "е лань", "yelan"),
+    ("линнея", "линея", "linnea"),
+    ("дурин", "durin"),
+    ("флинс", "flins"),
+    ("лаум", "laum"),
+)
+
+# Плоский набор для has_event_5star() — back-compat.
+EVENT_5STAR: frozenset[str] = frozenset(
+    alias for group in EVENT_5STAR_GROUPS for alias in group
+)
+
+# alias → canonical_name (первое имя в группе).
+EVENT_5STAR_CANONICAL: dict[str, str] = {
+    alias: group[0] for group in EVENT_5STAR_GROUPS for alias in group
 }
 
 # --- стоп-слова мусора ----------------------------------------------
@@ -305,11 +350,28 @@ def load_seen(path: str) -> dict[str, dict[str, dict[str, Any]]]:
 
 
 def save_seen(path: str, seen: dict[str, dict[str, dict[str, Any]]]) -> None:
+    """Атомарно сохранить seen-файл.
+
+    Записываем во временный файл рядом с целевым, потом os.replace —
+    это не оставляет частично записанного seen.json при крэше скрипта
+    (на больших seen с историей запись неатомарна → если упасть в
+    середине, файл побьётся и придётся делать --reset). os.replace
+    атомарен на любых платформах, где запускается этот скрипт.
+    """
     try:
-        with open(path, "w", encoding="utf-8") as f:
+        d = os.path.dirname(os.path.abspath(path)) or "."
+        tmp = os.path.join(d, f".{os.path.basename(path)}.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(seen, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
     except Exception as e:
         print(f"[seen] ошибка сохранения {path}: {e}")
+        # подчищаем мусор, если он остался
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except Exception:
+            pass
 
 
 def update_seen(
