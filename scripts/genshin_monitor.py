@@ -4,7 +4,8 @@
 
 Фильтрация:
 - строго сервер Европа;
-- все цены приводятся в рубли (USD/EUR → RUB);
+- цены забираем сразу в рублях (FunPay умеет отдавать ₽ через
+  ?currency=RUR / Cookie `currency=RUR`);
 - отсечка по ценам: cat1 (AR 50-60): 50-3000₽, cat2 (AR 0-20): 50-700₽;
 - пропускаем "нероллы" (data-f-type="Нероленный");
 - пропускаем мусор (договорная/под заказ/фарм/услуги);
@@ -33,17 +34,21 @@ from common import (  # noqa: E402
     CAT2_MIN_PRICE,
     fetch,
     has_event_5star,
-    has_standard_5star,
+    is_blacklisted_seller,
     is_europe,
     is_garbage,
     load_seen,
     price_to_rub,
+    prune_seen,
     save_seen,
     update_seen,
 )
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "genshin_seen.json")
-FUNPAY_URL = "https://funpay.com/lots/696/"
+# ?currency=RUR принуждает FunPay отдавать цены в рублях с учётом комиссии
+# площадки — это и есть настоящая "цена для покупателя" (на ~300₽ больше,
+# чем USD*курс, из-за комиссий продавца и платёжки).
+FUNPAY_URL = "https://funpay.com/lots/696/?currency=RUR"
 
 
 def parse_funpay(html: str | None = None) -> list[dict[str, Any]]:
@@ -82,7 +87,11 @@ def parse_funpay(html: str | None = None) -> list[dict[str, Any]]:
         hero = hero_m.group(1) if hero_m else "?"
 
         srv_m = re.findall(r"tc-server-inside[^>]*>([^<]+)", body)
-        server = srv_m[0].strip() if srv_m else ""
+        if srv_m:
+            server = srv_m[0].strip()
+        else:
+            srv_m2 = re.search(r'tc-server[^"]*"[^>]*>([^<]+)</div>', body)
+            server = srv_m2.group(1).strip() if srv_m2 else ""
 
         desc_m = re.findall(r"tc-desc-text[^>]*>([^<]+)", body)
         desc = (
@@ -97,9 +106,13 @@ def parse_funpay(html: str | None = None) -> list[dict[str, Any]]:
         currency = unit_m.group(1).strip() if unit_m else ""
         price_num = None
         try:
-            price_num = float(price_str.replace("\u00a0", "").replace(" ", "").replace(",", "."))
+            price_num = float(
+                price_str.replace("\u00a0", "").replace(" ", "").replace(",", ".")
+            )
         except Exception:
             pass
+        # Если сайт уже отдал в ₽ — price_to_rub вернёт то же число.
+        # Если вдруг USD/EUR — применит курсовой fallback.
         price_rub = price_to_rub(price_num, currency) if price_num is not None else None
 
         seller_m = re.findall(r"media-user-name[^>]*>\s*\n?\s*([^<]+)", body)
@@ -118,6 +131,11 @@ def parse_funpay(html: str | None = None) -> list[dict[str, Any]]:
             "price_rub": price_rub,
             "seller": seller,
             "url": url,
+            # FunPay в ленте 696 не отдаёт дату создания лота. Используем
+            # порядок в HTML как слабую прокси-метрику "свежести":
+            # чем раньше встретился — тем выше в ленте (FunPay сортирует
+            # промо → остальные в обратном хронологическом порядке).
+            "_feed_order": len(results),
         })
     return results
 
@@ -129,6 +147,8 @@ def _passes_common(a: dict[str, Any]) -> bool:
     if a.get("type", "") in ("нероленный", "неролл"):
         return False
     if is_garbage(a.get("desc", "")):
+        return False
+    if is_blacklisted_seller(a.get("seller")):
         return False
     if a.get("price_rub") is None:
         return False
@@ -156,10 +176,6 @@ def categorize(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[
             # хочет именно ивентовые, а не "может быть").
             if not has_event_5star(desc):
                 continue
-            # Дополнительная страховка: если ивентовый и стандартный вместе —
-            # показываем (это нормально). Если только стандартные — has_event_5star
-            # уже вернул False и мы сюда не зашли.
-            _ = has_standard_5star  # оставлено для читаемости
             cat2.append(a)
 
     cat1.sort(key=lambda x: x.get("price_rub") or float("inf"))
@@ -177,6 +193,8 @@ def run(reset: bool = False) -> dict[str, Any]:
         "new_cat1": [...], "new_cat2": [...],
         "drop_cat1": [...], "drop_cat2": [...],
         "first_run": bool,
+        "pruned": N,
+        "ok": bool,
       }
     """
     html = fetch(FUNPAY_URL)
@@ -195,6 +213,7 @@ def run(reset: bool = False) -> dict[str, Any]:
     )
 
     seen = seen_before
+    pruned = prune_seen(seen)
     new_cat1, drop_cat1 = update_seen(seen, "cat1", cat1)
     new_cat2, drop_cat2 = update_seen(seen, "cat2", cat2)
     save_seen(STATE_FILE, seen)
@@ -203,6 +222,14 @@ def run(reset: bool = False) -> dict[str, Any]:
     if first_run:
         new_cat1, new_cat2 = [], []
         drop_cat1, drop_cat2 = [], []
+
+    # Сортировки:
+    #  new — по порядку в ленте FunPay (вверху — самые свежие);
+    #  drops — по проценту падения.
+    new_cat1.sort(key=lambda x: x.get("_feed_order", 10**9))
+    new_cat2.sort(key=lambda x: x.get("_feed_order", 10**9))
+    drop_cat1.sort(key=lambda x: -float(x.get("_drop_pct", 0) or 0))
+    drop_cat2.sort(key=lambda x: -float(x.get("_drop_pct", 0) or 0))
 
     return {
         "source": "FunPay",
@@ -214,6 +241,8 @@ def run(reset: bool = False) -> dict[str, Any]:
         "drop_cat1": drop_cat1,
         "drop_cat2": drop_cat2,
         "first_run": first_run,
+        "pruned": pruned,
+        "ok": len(raw) > 0,
     }
 
 
@@ -259,7 +288,7 @@ def _format_report(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     import argparse
 
     p = argparse.ArgumentParser(description="FunPay monitor — Genshin accounts")
@@ -268,6 +297,7 @@ def main(argv: list[str] | None = None) -> None:
 
     data = run(reset=args.reset)
     print(_format_report(data))
+    return 0 if data.get("ok") else 2
 
 
 if __name__ == "__main__":
@@ -277,4 +307,4 @@ if __name__ == "__main__":
             sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
         except Exception:
             pass
-    main()
+    sys.exit(main())

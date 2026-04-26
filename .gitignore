@@ -2,5 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Runtime report artifact
+# Runtime artifacts (state файлы и отчёт — у каждого свой)
 scripts/report.md
+scripts/genshin_seen.json
+scripts/paygame_seen.json

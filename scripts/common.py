@@ -6,8 +6,10 @@
 - Загрузка / сохранение state-файла с форматом
   {id: {price, first_seen, last_seen}} + обратная совместимость
   со старым форматом {id: price}.
-- Обёртка над urllib с gzip и edge-case'ами FunPay/PayGame.
-- Конвертация валюты в рубли.
+- Обёртка над urllib с gzip и ретраями.
+- Конвертация валюты в рубли (оставлена как fallback; на практике
+  и FunPay, и PayGame нам отдают прайсы сразу в ₽).
+- Чистка устаревших seen-записей.
 """
 from __future__ import annotations
 
@@ -16,19 +18,23 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 from typing import Any
 
 
 # --- валюта ---------------------------------------------------------
-# FunPay периодически отдаёт цены то в EUR, то в USD.
-# Пользователь просил строго отображение в рублях.
-# Курсы вынесены в одно место; можно переопределить через env-vars.
+# Курсы оставлены как fallback-конверсия на случай, если сайт внезапно
+# отдаст не-рублёвую цену. В нормальном режиме мы заставляем сайт
+# отдавать ₽ напрямую (см. genshin_monitor.py / paygame_monitor.py).
 EUR_TO_RUB = float(os.environ.get("GENSHIB_EUR_RUB", "105"))
 USD_TO_RUB = float(os.environ.get("GENSHIB_USD_RUB", "95"))
 
 
 # --- 5★ персонажи ---------------------------------------------------
+# STANDARD_5STAR остался для исторической совместимости (пользователь
+# когда-то просил отсекать "только стандартных" — эту роль теперь
+# выполняет требование "есть ивентовый 5★" в cat2, см. categorize()).
 STANDARD_5STAR = {
     "дилюк", "diluc", "джинн", "jean", "кэ цин", "кэцин", "ке цин", "кецин",
     "keqing", "мона", "mona", "цици", "ци ци", "qiqi", "тигнари", "tighnari",
@@ -66,15 +72,47 @@ EVENT_5STAR = {
 # --- стоп-слова мусора ----------------------------------------------
 # Эти фразы встречаются в "договорная цена" заглушках (2₽),
 # сервисах фарма / прокачки, услугах и т.п.
+# Также ловим варианты "цена договорная / цена дог. / торг".
 GARBAGE_PHRASES = (
     "договорн",           # "ДОГОВОРНАЯ ЦЕНА", "договорная"
+    "цена дог",           # "цена договорная", "цена дог."
+    "торг умест",         # "торг уместен"
     "под заказ", "на заказ",
     "фарм",               # услуга фарма
     "прокач ак",          # услуга прокачки
     "буст ",              # буст абиссa и т.п.
     "услуг",              # "услуги прокачки"
     "сборк",              # "сборка аккаунта"
+    # --- «Куплю ваш аккаунт» и прочие байеры, маскирующиеся
+    # под продавцов (выкладывают «виртуальный» лот с обратным
+    # смыслом). В легитных описаниях продавцов "куплю/выкуп/
+    # скуплю/обменяю" не встречаются — бить по субстроке
+    # безопасно.
+    "куплю",             # "Куплю ваш аккаунт!"
+    "выкуп",             # "выкуп аккаунтов", "выкупаю"
+    "скуп",              # "скуплю", "скупка"
+    "продайте мне",      # реже, но бывает
+    "обменяю",          # бартер-лоты
 )
+
+# --- чёрный список продавцов ---------------------------
+# Ник продавца любого из источников (регистронезависимо).
+# Расширяется через GENSHIB_SELLER_BLACKLIST=«a,b,c».
+DEFAULT_SELLER_BLACKLIST = (
+    "aurafarm",  # ритейл-фарма с искусственно заниженными ценами
+)
+
+_extra = os.environ.get("GENSHIB_SELLER_BLACKLIST", "").strip()
+SELLER_BLACKLIST: frozenset[str] = frozenset(
+    list(DEFAULT_SELLER_BLACKLIST)
+    + [s.strip().lower() for s in _extra.split(",") if s.strip()]
+)
+
+
+def is_blacklisted_seller(seller: str | None) -> bool:
+    if not seller:
+        return False
+    return seller.strip().lower() in SELLER_BLACKLIST
 
 # --- минимальная / максимальная цена для сегментов ------------------
 # cat1 — AR 50-60, "дорогой" сегмент, фильтр по верхнему пределу ≤ 3000₽.
@@ -88,8 +126,8 @@ CAT2_MIN_PRICE = 50.0
 CAT2_MAX_PRICE = 700.0
 CAT2_AR_MIN, CAT2_AR_MAX = 0, 20
 
-# какой сервер считать "Европой"
-EUROPE_TOKENS = ("европ", "europe", "eu ", " eu", "eu,")
+# какие значения считать "Европой" (точное совпадение после нормализации)
+EUROPE_VALUES = {"европа", "europe", "eu"}
 
 
 # --- фильтры --------------------------------------------------------
@@ -98,28 +136,31 @@ def has_event_5star(text: str) -> bool:
     return any(name in t for name in EVENT_5STAR)
 
 
-def has_standard_5star(text: str) -> bool:
-    t = (text or "").lower()
-    return any(name in t for name in STANDARD_5STAR)
-
-
 def is_garbage(desc: str) -> bool:
     t = (desc or "").lower()
     return any(p in t for p in GARBAGE_PHRASES)
 
 
 def is_europe(server: str) -> bool:
-    s = (server or "").lower().strip()
+    """
+    Строгое совпадение значения поля 'сервер'. Не подстрока —
+    иначе "eu" подтягивало бы случайные подстроки в длинных названиях.
+    """
+    s = (server or "").strip().lower()
     if not s:
         return False
-    return any(tok in s for tok in EUROPE_TOKENS)
+    # часто в HTML есть косые варианты "Европа (EU)" — дробим
+    for token in re.split(r"[\s,()/|]+", s):
+        if token in EUROPE_VALUES:
+            return True
+    return s in EUROPE_VALUES
 
 
-def price_to_rub(price_num: float, currency: str) -> float | None:
+def price_to_rub(price_num: float | None, currency: str) -> float | None:
     if price_num is None:
         return None
     c = (currency or "").strip().lower()
-    if c in ("₽", "rub", "руб", "руб.", "р", "р."):
+    if c in ("₽", "rub", "rur", "руб", "руб.", "р", "р."):
         return float(price_num)
     if c == "€" or "eur" in c:
         return float(price_num) * EUR_TO_RUB
@@ -129,6 +170,8 @@ def price_to_rub(price_num: float, currency: str) -> float | None:
 
 
 # --- HTTP fetch -----------------------------------------------------
+# Accept-Encoding: gzip only — некоторые площадки отдают brotli,
+# а питон stdlib его не расшифровывает, приходит мусор.
 DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -139,30 +182,65 @@ DEFAULT_HEADERS = {
         "text/html,application/xhtml+xml,application/xml;q=0.9,"
         "image/avif,image/webp,image/apng,*/*;q=0.8"
     ),
-    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate",
+    # ВАЖНО: НЕ отправляем Accept-Language. FunPay с Accept-Language=ru
+    # игнорирует ?currency=RUR и принудительно отдаёт цены в долларах
+    # (видимо, по геолокации). Без этого заголовка ?currency=RUR работает
+    # корректно и приходят рубли.
+    "Accept-Encoding": "gzip",
 }
 
 
-def fetch(url: str, timeout: int = 30) -> str:
-    """Скачать страницу, вернуть decoded HTML. На ошибке вернуть "" и напечатать."""
+def fetch(
+    url: str,
+    timeout: int = 30,
+    *,
+    retries: int = 2,
+    retry_delay: float = 2.0,
+    headers: dict[str, str] | None = None,
+    accept_json: bool = False,
+) -> str:
+    """
+    Скачать ресурс, вернуть decoded текст.
+
+    Делает до `1 + retries` попыток с паузой `retry_delay` сек
+    между ошибочными. На итоговом провале возвращает "" (а не None),
+    чтобы вызывающий мог делать if not resp: ....
+    """
+    hdrs = dict(DEFAULT_HEADERS)
+    if accept_json:
+        hdrs["Accept"] = "application/json, */*;q=0.1"
+    if headers:
+        hdrs.update(headers)
+
+    last_err: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(url, headers=hdrs)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = resp.read()
+                enc = (resp.headers.get("Content-Encoding") or "").lower()
+                if enc == "gzip":
+                    data = gzip.decompress(data)
+                return data.decode("utf-8", errors="replace")
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                time.sleep(retry_delay)
+                continue
+    print(f"[fetch] ошибка {url}: {last_err}")
+    return ""
+
+
+def fetch_json(url: str, timeout: int = 30, *, retries: int = 2) -> Any:
+    """Скачать JSON. Возвращает распарсенное значение или None при ошибке."""
+    body = fetch(url, timeout=timeout, retries=retries, accept_json=True)
+    if not body:
+        return None
     try:
-        req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
-        resp = urllib.request.urlopen(req, timeout=timeout)
-        data = resp.read()
-        enc = (resp.headers.get("Content-Encoding") or "").lower()
-        if enc == "gzip":
-            data = gzip.decompress(data)
-        elif enc == "br":
-            try:
-                import brotli  # type: ignore
-                data = brotli.decompress(data)
-            except Exception:
-                pass
-        return data.decode("utf-8", errors="replace")
+        return json.loads(body)
     except Exception as e:
-        print(f"[fetch] ошибка {url}: {e}")
-        return ""
+        print(f"[fetch_json] не удалось распарсить {url}: {e}")
+        return None
 
 
 # --- seen state -----------------------------------------------------
@@ -171,6 +249,9 @@ def fetch(url: str, timeout: int = 30) -> str:
 #    "cat2": {...}}
 # Старый формат (обратная совместимость):
 #   {"cat1": {"id": 123.0}, "cat2": {...}}
+SEEN_TTL_SECONDS = int(os.environ.get("GENSHIB_SEEN_TTL", str(14 * 24 * 3600)))
+
+
 def load_seen(path: str) -> dict[str, dict[str, dict[str, Any]]]:
     if not os.path.exists(path):
         return {"cat1": {}, "cat2": {}}
@@ -217,9 +298,13 @@ def update_seen(
     Обновить seen по текущему срезу.
 
     Возвращает (new_items, price_drop_items):
-      - new_items: id, которых не было в seen
-      - price_drop_items: id с ценой ниже прошлого раза (с доп. полем
-        "_prev_price" и "_drop_pct")
+      - new_items: id, которых не было в seen (с дополнительным полем
+        "_first_seen_ts" — unix-ts, когда лот впервые зарегистрирован).
+      - price_drop_items: id с ценой ниже прошлого раза (с доп. полями
+        "_prev_price" и "_drop_pct").
+
+    Важно: если текущая цена не известна (price_rub=None), мы НЕ
+    затираем прошлую цену — ждём следующего прогона.
     """
     now = int(time.time())
     bucket = seen.setdefault(cat, {})
@@ -233,7 +318,9 @@ def update_seen(
         prev = bucket.get(iid)
         if prev is None:
             bucket[iid] = {"price": price, "first_seen": now, "last_seen": now}
-            new_items.append(it)
+            it2 = dict(it)
+            it2["_first_seen_ts"] = now
+            new_items.append(it2)
         else:
             prev_price = prev.get("price")
             if (
@@ -248,11 +335,47 @@ def update_seen(
                     (1 - price / float(prev_price)) * 100.0, 1
                 )
                 drops.append(it2)
-            prev["price"] = price
+            # цену обновляем только если она известна
+            if price is not None:
+                prev["price"] = price
             prev["last_seen"] = now
             if prev.get("first_seen") is None:
                 prev["first_seen"] = now
     return new_items, drops
+
+
+def prune_seen(
+    seen: dict[str, dict[str, dict[str, Any]]],
+    ttl_seconds: int = SEEN_TTL_SECONDS,
+    now: int | None = None,
+) -> int:
+    """
+    Выкинуть записи, last_seen которых старше ttl_seconds.
+
+    Возвращает количество удалённых записей. У записей с last_seen=None
+    TTL не применяется (legacy), а проставляется текущее время —
+    на следующем прогоне они будут отсчитываться нормально.
+    """
+    if now is None:
+        now = int(time.time())
+    removed = 0
+    for cat_bucket in seen.values():
+        if not isinstance(cat_bucket, dict):
+            continue
+        for iid in list(cat_bucket.keys()):
+            rec = cat_bucket[iid]
+            ls = rec.get("last_seen") if isinstance(rec, dict) else None
+            if ls is None:
+                if isinstance(rec, dict):
+                    rec["last_seen"] = now
+                continue
+            try:
+                if now - int(ls) > ttl_seconds:
+                    del cat_bucket[iid]
+                    removed += 1
+            except Exception:
+                continue
+    return removed
 
 
 __all__ = [
@@ -269,14 +392,16 @@ __all__ = [
     "CAT2_MAX_PRICE",
     "CAT2_AR_MIN",
     "CAT2_AR_MAX",
-    "EUROPE_TOKENS",
+    "EUROPE_VALUES",
+    "SEEN_TTL_SECONDS",
     "has_event_5star",
-    "has_standard_5star",
     "is_garbage",
     "is_europe",
     "price_to_rub",
     "fetch",
+    "fetch_json",
     "load_seen",
     "save_seen",
     "update_seen",
+    "prune_seen",
 ]
