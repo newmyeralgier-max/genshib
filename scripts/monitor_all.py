@@ -117,6 +117,15 @@ def _fmt_item_md(
             j = o.get("_jaccard", 0.0)
             ourl = o.get("url") or ""
             lines.append(f"    - {ops} — {ourl} (jaccard {j:.2f})")
+
+    # Гл. 10: «🔗 дубль с другой площадки».
+    dups = (ctx or {}).get("dups") or {}
+    dup = dups.get(sid)
+    if dup:
+        durl = dup.get("url") or ""
+        dprice = dup.get("price_rub")
+        dps = f"{dprice:.0f}₽" if isinstance(dprice, (int, float)) else "?"
+        lines.append(f"  - 🔗 дубль с другой площадки: {durl} ({dps})")
     return lines
 
 
@@ -219,10 +228,26 @@ def _build_context(fp_data: dict[str, Any], pg_data: dict[str, Any]) -> dict[str
     medians = match.fp_median_by_class(fp_pool) if fp_pool else {}
     matches_pg = match.build_matches(pg_pool, fp_pool) if fp_pool and pg_pool else {}
     matches_fp = match.build_matches(fp_pool, pg_pool) if fp_pool and pg_pool else {}
+
+    # Гл. 10: дедуп между источниками. Строим словари
+    # «id → партнёрский лот с другого источника».
+    dup_pairs = match.find_cross_source_dups(fp_pool, pg_pool)
+    dups_fp: dict[str, dict[str, Any]] = {}
+    dups_pg: dict[str, dict[str, Any]] = {}
+    for f, p in dup_pairs:
+        fid, pid = str(f.get("id") or ""), str(p.get("id") or "")
+        if fid:
+            dups_fp[fid] = p
+        if pid:
+            dups_pg[pid] = f
+
     return {
         "medians": medians,
         "matches_pg": matches_pg,
         "matches_fp": matches_fp,
+        "dups_fp": dups_fp,
+        "dups_pg": dups_pg,
+        "dups_total": len(dup_pairs),
     }
 
 
@@ -265,6 +290,7 @@ def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_a
         section_ctx = {
             "medians": ctx_full["medians"],
             "matches": ctx_full["matches_fp"] if label == "FunPay" else ctx_full["matches_pg"],
+            "dups": ctx_full["dups_fp"] if label == "FunPay" else ctx_full["dups_pg"],
         }
         lines.extend(_section(
             f"cat1: AR {CAT1_AR_MIN}-{CAT1_AR_MAX}, ≤ {int(CAT1_MAX_PRICE)}₽",
@@ -306,7 +332,11 @@ def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_a
             + len(pg_data.get("drop_cat1", []))
             + len(pg_data.get("drop_cat2", []))
         )
-        lines.append(f"_итого за прогон: **{total_new}** новых, **{total_drops}** подешевевших._")
+        line = f"_итого за прогон: **{total_new}** новых, **{total_drops}** подешевевших"
+        if ctx_full.get("dups_total"):
+            line += f", **{ctx_full['dups_total']}** дублей между источниками"
+        line += "._"
+        lines.append(line)
     lines.append("")
     return "\n".join(lines)
 

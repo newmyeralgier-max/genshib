@@ -218,3 +218,85 @@ def build_matches(
             {**o, "_jaccard": -score} for (score, _p, o) in scored[:top_k]
         ]
     return out
+
+
+# --- Глава 10: дедуп между источниками -----------------------------
+
+# Дефолты для дедупа. Подобраны эмпирически:
+# - max_price_diff_ratio=0.15 — цены различаются ≤ 15% (дороже/дешевле);
+# - jaccard_strong=0.85 — почти полное совпадение состава 5★ при разных
+#   селлерах (когда совпадает селлер — порог ниже, см. is_dup);
+# - jaccard_with_seller=0.7 — порог при совпадении ника продавца.
+DEFAULT_DUP_PRICE_DIFF = 0.15
+DEFAULT_DUP_JACCARD_STRONG = 0.85
+DEFAULT_DUP_JACCARD_WITH_SELLER = 0.7
+
+
+def _norm_seller(s: object) -> str:
+    return (str(s) or "").strip().lower()
+
+
+def is_dup(
+    a: dict[str, Any],
+    b: dict[str, Any],
+    *,
+    max_price_diff_ratio: float = DEFAULT_DUP_PRICE_DIFF,
+    jaccard_strong: float = DEFAULT_DUP_JACCARD_STRONG,
+    jaccard_with_seller: float = DEFAULT_DUP_JACCARD_WITH_SELLER,
+) -> bool:
+    """
+    Считаем два лота дублями, если они с разных источников и:
+    - тот же AR-бакет;
+    - цены различаются не более чем на max_price_diff_ratio;
+    - jaccard 5★ ≥ jaccard_with_seller И селлеры совпадают,
+      ИЛИ jaccard 5★ ≥ jaccard_strong (когда селлеры разные).
+    """
+    if a.get("source") and a.get("source") == b.get("source"):
+        return False
+    al, ach, an = fingerprint(a)
+    bl, bch, bn = fingerprint(b)
+    if al is None or bl is None or al != bl:
+        return False
+    if an == 0 or bn == 0:
+        return False
+    pa = a.get("price_rub")
+    pb = b.get("price_rub")
+    if not isinstance(pa, (int, float)) or not isinstance(pb, (int, float)):
+        return False
+    if pa <= 0 or pb <= 0:
+        return False
+    if abs(pa - pb) / max(pa, pb) > max_price_diff_ratio:
+        return False
+    j = jaccard(ach, bch)
+    sa, sb = _norm_seller(a.get("seller")), _norm_seller(b.get("seller"))
+    if sa and sa == sb:
+        return j >= jaccard_with_seller
+    return j >= jaccard_strong
+
+
+def find_cross_source_dups(
+    fp_items: list[dict[str, Any]],
+    pg_items: list[dict[str, Any]],
+    **kwargs: Any,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """
+    Найти все пары (fp_lot, pg_lot), которые is_dup() считает дублями.
+    """
+    if not fp_items or not pg_items:
+        return []
+    # Индексируем PG по AR-бакету для O(n*k) вместо O(n*m).
+    by_bucket: dict[int | None, list[dict[str, Any]]] = {}
+    for p in pg_items:
+        b, _, n = fingerprint(p)
+        if b is None or n == 0:
+            continue
+        by_bucket.setdefault(b, []).append(p)
+    out: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for f in fp_items:
+        b, _, n = fingerprint(f)
+        if b is None or n == 0:
+            continue
+        for p in by_bucket.get(b, []):
+            if is_dup(f, p, **kwargs):
+                out.append((f, p))
+    return out

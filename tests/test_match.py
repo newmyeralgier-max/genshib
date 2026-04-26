@@ -216,5 +216,64 @@ class TestBuildMatches(unittest.TestCase):
         self.assertEqual(m["p1"][0]["_jaccard"], 1.0)
 
 
+class TestDedup(unittest.TestCase):
+    def _lot(
+        self, sid: str, ar: int, desc: str, price: float, source: str, seller: str = "x"
+    ) -> dict:
+        return {
+            "id": sid, "ar": ar, "desc": desc, "price_rub": price,
+            "source": source, "seller": seller,
+        }
+
+    def test_same_seller_partial_overlap(self) -> None:
+        a = self._lot("a", 55, "Скирк + Ху Тао + Фурина", 700, "FunPay", "petya")
+        b = self._lot("b", 55, "Скирк + Ху Тао", 720, "PayGame", "petya")
+        # jaccard 2/3 ≈ 0.667 → дубль через селлера (порог 0.7? нет)
+        # 0.667 < 0.7 → НЕ дубль. Проверим обратное: добавим Фурину обоим.
+        c = self._lot("c", 55, "Скирк + Ху Тао + Фурина", 720, "PayGame", "petya")
+        self.assertTrue(match.is_dup(a, c))           # j=1.0
+        self.assertFalse(match.is_dup(a, b))          # j=0.667 < 0.7
+
+    def test_diff_seller_full_overlap(self) -> None:
+        a = self._lot("a", 55, "Скирк + Ху Тао + Фурина", 700, "FunPay", "alpha")
+        b = self._lot("b", 55, "Скирк + Ху Тао + Фурина", 720, "PayGame", "beta")
+        self.assertTrue(match.is_dup(a, b))           # j=1.0 ≥ 0.85
+
+    def test_diff_seller_partial_overlap_not_dup(self) -> None:
+        a = self._lot("a", 55, "Скирк + Ху Тао + Фурина", 700, "FunPay", "alpha")
+        b = self._lot("b", 55, "Скирк + Ху Тао", 720, "PayGame", "beta")
+        # j=0.667 < 0.85 → не дубль (без совпадения селлера порог жёстче)
+        self.assertFalse(match.is_dup(a, b))
+
+    def test_diff_price_too_far(self) -> None:
+        a = self._lot("a", 55, "Скирк + Ху Тао", 200, "FunPay", "alpha")
+        b = self._lot("b", 55, "Скирк + Ху Тао", 800, "PayGame", "alpha")
+        self.assertFalse(match.is_dup(a, b))
+
+    def test_same_source_never_dup(self) -> None:
+        a = self._lot("a", 55, "Скирк + Ху Тао", 700, "FunPay", "alpha")
+        b = self._lot("b", 55, "Скирк + Ху Тао", 720, "FunPay", "alpha")
+        self.assertFalse(match.is_dup(a, b))
+
+    def test_diff_ar_bucket_not_dup(self) -> None:
+        a = self._lot("a", 50, "Скирк + Ху Тао + Фурина", 700, "FunPay", "alpha")
+        b = self._lot("b", 55, "Скирк + Ху Тао + Фурина", 720, "PayGame", "alpha")
+        self.assertFalse(match.is_dup(a, b))
+
+    def test_find_cross_source_dups(self) -> None:
+        fp = [
+            self._lot("f1", 55, "Скирк + Ху Тао + Фурина", 700, "FunPay", "alpha"),
+            self._lot("f2", 50, "Скирк + Линнея + Аяка", 500, "FunPay", "x"),
+        ]
+        pg = [
+            self._lot("p1", 55, "Скирк + Ху Тао + Фурина", 720, "PayGame", "beta"),
+            self._lot("p2", 60, "Скирк + Ху Тао", 200, "PayGame", "x"),
+        ]
+        pairs = match.find_cross_source_dups(fp, pg)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0][0]["id"], "f1")
+        self.assertEqual(pairs[0][1]["id"], "p1")
+
+
 if __name__ == "__main__":
     unittest.main()
