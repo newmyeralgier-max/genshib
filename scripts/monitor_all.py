@@ -446,6 +446,26 @@ def main(argv: list[str] | None = None) -> int:
     now_utc = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
     md = build_markdown(fp_data, pg_data, now_utc)
 
+    # Гл. 5: Telegram. Нотифицируем только если бот настроен через env;
+    # иначе notifier.send() молча ничего не делает.
+    try:
+        import notifier  # локальный импорт, чтоб тесты могли мокать env
+        ctx_local = _build_context(fp_data, pg_data)
+        hot_for_tg = hot_pick(
+            fp_data, pg_data, ctx_local["medians"],
+            threshold=float(os.environ.get("GENSHIB_TG_MIN_DISCOUNT", "30")),
+            n=int(os.environ.get("GENSHIB_TG_LIMIT", "10")),
+        )
+        # Прокидываем «красивые имена персонажей» в payload для TG.
+        for h in hot_for_tg:
+            _, chars, _ = match.fingerprint(h)
+            h["_chars_pretty"] = ", ".join(c.title() for c in sorted(chars))
+        ok_tg, msg_tg = notifier.send(hot_for_tg)
+        if not ok_tg and "no token" not in msg_tg:
+            print(f"[telegram] {msg_tg}", file=sys.stderr)
+    except Exception as e:  # никогда не валим основной флоу из-за TG
+        print(f"[telegram] {e}", file=sys.stderr)
+
     try:
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
         with open(args.out, "w", encoding="utf-8") as f:
