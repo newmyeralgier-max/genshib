@@ -1,0 +1,965 @@
+{
+  "count": 1040,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 412400,
+      "seller": {
+        "id": 387404,
+        "username": "Kaiho",
+        "avatar": "https://cdn.payga.me/avatar/2025/11/24/Kaiho_avatar.jpg",
+        "rating": 0.0,
+        "reaction": true,
+        "extra": {},
+        "review_count": 0,
+        "notifications": {
+          "telegram": true
+        },
+        "plan": {
+          "id": 2,
+          "title": "Новичок",
+          "slug": "free",
+          "image": null
+        }
+      },
+      "title": "(60AR) Варка, Дурин+сигна, Венти+элегия, Риззли с2+сигна(топ 1%), Фурина+ сигна(топ 1%)",
+      "game": {
+        "title": "Genshin Impact",
+        "cover": "https://cdn.payga.me/cover/2021/09/17/genshin-art.jpg",
+        "icon": "https://cdn.payga.me/icon/2023/10/19/icon-genshin-impact.svg",
+        "slug": "genshin-impact",
+        "id": 22
+      },
+      "game_server": [
+        {
+          "title": "Европа",
+          "slug": "genshin-europe",
+          "id": 1202,
+          "region": {
+            "id": 2,
+            "title": "Europe",
+            "slug": "eu",
+            "code_alpha": "EU"
+          }
+        }
+      ],
+      "offer_type": {
+        "id": 2,
+        "variant": "account",
+        "name": "Аккаунты",
+        "position": 3,
+        "slug": "account"
+      },
+      "category": {},
+      "item": {},
+      "quantity": 1.0,
+      "minimal_quantity": 1.0,
+      "price": 8500.0,
+      "image": {
+        "id": 979392,
+        "image": "https://cdn.payga.me/offers/2026/4/12/387404/412400/ef63c7d6c3fd10b6969d10cf003a8b63.image.jpg",
+        "meta": {
+          "width": 1920,
+          "height": 864
+        },
+        "preview": "https://cdn.payga.me/offers/2026/4/12/387404/412400/ef63c7d6c3fd10b6969d10cf003a8b63.preview.jpg",
+        "completed": true
+      },
+      "props_data": [
+        {
+          "id": 6467535,
+          "prop": {
+            "id": 138,
+            "name": "Гарантия продавца",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 4437,
+            "value": "10 дней",
+            "int_value": null,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6467536,
+          "prop": {
+            "id": 129,
+            "name": "Смена данных",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": true,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 4227,
+            "value": "Полная",
+            "int_value": null,
+            "icon": "https://cdn.payga.me/prop/2023/02/19/d-full.png",
+            "is_any": false
+          }
+        },
+        {
+          "id": 6467537,
+          "prop": {
+            "id": 74,
+            "name": "AR",
+            "type": "number",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": true,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": false
+          },
+          "val": {
+            "id": 1852,
+            "value": null,
+            "int_value": 60,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6467538,
+          "prop": {
+            "id": 124,
+            "name": "В аренду",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": false,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 37020,
+            "value": "Нет",
+            "int_value": null,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6467539,
+          "prop": {
+            "id": 218,
+            "name": "Леги",
+            "type": "number",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": false
+          },
+          "val": {
+            "id": 91445,
+            "value": null,
+            "int_value": 38,
+            "icon": null,
+            "is_any": false
+          }
+        }
+      ],
+      "is_active": true,
+      "is_frozen": false,
+      "created_date": "2025-11-24T04:40:45.441053+00:00",
+      "pack": 1,
+      "last_raised": "2026-04-26T21:26:46.986257+00:00",
+      "xl_date": null,
+      "unlimited": false,
+      "auto_delivery": false
+    },
+    {
+      "id": 496116,
+      "seller": {
+        "id": 470129,
+        "username": "ninomaycry",
+        "avatar": "https://cdn.payga.me/avatar/2026/04/07/ninomaycry_avatar.jpg",
+        "rating": 0.0,
+        "reaction": false,
+        "extra": {},
+        "review_count": 0,
+        "notifications": {
+          "telegram": false
+        },
+        "plan": {
+          "id": 16,
+          "title": "Новичок+",
+          "slug": "freeplus",
+          "image": "https://cdn.payga.me/plan/2025/12/12/newbie_Ijrszum_1.svg"
+        }
+      },
+      "title": "131 Лега / Продажа личного аккаунта 59 легендарных персонажей + 36 легендарных оружия + 36 консты",
+      "game": {
+        "title": "Genshin Impact",
+        "cover": "https://cdn.payga.me/cover/2021/09/17/genshin-art.jpg",
+        "icon": "https://cdn.payga.me/icon/2023/10/19/icon-genshin-impact.svg",
+        "slug": "genshin-impact",
+        "id": 22
+      },
+      "game_server": [
+        {
+          "title": "Европа",
+          "slug": "genshin-europe",
+          "id": 1202,
+          "region": {
+            "id": 2,
+            "title": "Europe",
+            "slug": "eu",
+            "code_alpha": "EU"
+          }
+        }
+      ],
+      "offer_type": {
+        "id": 2,
+        "variant": "account",
+        "name": "Аккаунты",
+        "position": 3,
+        "slug": "account"
+      },
+      "category": {},
+      "item": {},
+      "quantity": 1.0,
+      "minimal_quantity": 1.0,
+      "price": 220000.0,
+      "image": {
+        "id": 990176,
+        "image": "https://cdn.payga.me/offers/2026/4/20/470129/496116/1e92d5253daec7be1b5343fabaae74fd.image.png",
+        "meta": {
+          "width": 860,
+          "height": 1320
+        },
+        "preview": "https://cdn.payga.me/offers/2026/4/20/470129/496116/1e92d5253daec7be1b5343fabaae74fd.preview.png",
+        "completed": true
+      },
+      "props_data": [
+        {
+          "id": 6500799,
+          "prop": {
+            "id": 129,
+            "name": "Смена данных",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": true,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 4227,
+            "value": "Полная",
+            "int_value": null,
+            "icon": "https://cdn.payga.me/prop/2023/02/19/d-full.png",
+            "is_any": false
+          }
+        },
+        {
+          "id": 6500800,
+          "prop": {
+            "id": 233,
+            "name": "Неролл",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": false
+          },
+          "val": {
+            "id": 94918,
+            "value": "Нет",
+            "int_value": null,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6500801,
+          "prop": {
+            "id": 138,
+            "name": "Гарантия продавца",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 4434,
+            "value": "2 дня",
+            "int_value": null,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6500802,
+          "prop": {
+            "id": 74,
+            "name": "AR",
+            "type": "number",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": true,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": false
+          },
+          "val": {
+            "id": 1852,
+            "value": null,
+            "int_value": 60,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6500803,
+          "prop": {
+            "id": 124,
+            "name": "В аренду",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": false,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 37020,
+            "value": "Нет",
+            "int_value": null,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6500804,
+          "prop": {
+            "id": 218,
+            "name": "Леги",
+            "type": "number",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": false
+          },
+          "val": {
+            "id": 121971,
+            "value": null,
+            "int_value": 131,
+            "icon": null,
+            "is_any": false
+          }
+        }
+      ],
+      "is_active": true,
+      "is_frozen": false,
+      "created_date": "2026-04-07T22:04:37.545575+00:00",
+      "pack": 1,
+      "last_raised": "2026-04-26T21:24:54.881354+00:00",
+      "xl_date": null,
+      "unlimited": false,
+      "auto_delivery": false
+    },
+    {
+      "id": 496758,
+      "seller": {
+        "id": 47790,
+        "username": "byterbro",
+        "avatar": "https://cdn.payga.me/avatar/2024/02/03/byterbro_avatar.jpg",
+        "rating": 5.0,
+        "reaction": true,
+        "extra": {},
+        "review_count": 1,
+        "notifications": {
+          "telegram": true
+        },
+        "plan": {
+          "id": 2,
+          "title": "Новичок",
+          "slug": "free",
+          "image": null
+        }
+      },
+      "title": "Аккаунт 56",
+      "game": {
+        "title": "Genshin Impact",
+        "cover": "https://cdn.payga.me/cover/2021/09/17/genshin-art.jpg",
+        "icon": "https://cdn.payga.me/icon/2023/10/19/icon-genshin-impact.svg",
+        "slug": "genshin-impact",
+        "id": 22
+      },
+      "game_server": [
+        {
+          "title": "Азия",
+          "slug": "genshin-asia",
+          "id": 1203,
+          "region": {
+            "id": 7,
+            "title": "Asia",
+            "slug": "asia",
+            "code_alpha": "KP"
+          }
+        }
+      ],
+      "offer_type": {
+        "id": 2,
+        "variant": "account",
+        "name": "Аккаунты",
+        "position": 3,
+        "slug": "account"
+      },
+      "category": {},
+      "item": {},
+      "quantity": 1.0,
+      "minimal_quantity": 1.0,
+      "price": 2300.0,
+      "image": {
+        "id": 975154,
+        "image": "https://cdn.payga.me/offers/2026/4/9/47790/496758/cd6a62c89682e25a3606ca09d2fe40b8.image.jpg",
+        "meta": {
+          "width": 1218,
+          "height": 502
+        },
+        "preview": "https://cdn.payga.me/offers/2026/4/9/47790/496758/cd6a62c89682e25a3606ca09d2fe40b8.preview.jpg",
+        "completed": true
+      },
+      "props_data": [
+        {
+          "id": 6485595,
+          "prop": {
+            "id": 138,
+            "name": "Гарантия продавца",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 4433,
+            "value": "1 день",
+            "int_value": null,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6485596,
+          "prop": {
+            "id": 129,
+            "name": "Смена данных",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": true,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 4227,
+            "value": "Полная",
+            "int_value": null,
+            "icon": "https://cdn.payga.me/prop/2023/02/19/d-full.png",
+            "is_any": false
+          }
+        },
+        {
+          "id": 6485597,
+          "prop": {
+            "id": 74,
+            "name": "AR",
+            "type": "number",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": true,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": false
+          },
+          "val": {
+            "id": 857,
+            "value": null,
+            "int_value": 56,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6485598,
+          "prop": {
+            "id": 124,
+            "name": "В аренду",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": false,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 37020,
+            "value": "Нет",
+            "int_value": null,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6485599,
+          "prop": {
+            "id": 218,
+            "name": "Леги",
+            "type": "number",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": false
+          },
+          "val": {
+            "id": 91794,
+            "value": null,
+            "int_value": 13,
+            "icon": null,
+            "is_any": false
+          }
+        }
+      ],
+      "is_active": true,
+      "is_frozen": false,
+      "created_date": "2026-04-09T09:20:17.388779+00:00",
+      "pack": 1,
+      "last_raised": "2026-04-26T21:21:16.029453+00:00",
+      "xl_date": null,
+      "unlimited": false,
+      "auto_delivery": false
+    },
+    {
+      "id": 506968,
+      "seller": {
+        "id": 480225,
+        "username": "Shadow4ve",
+        "avatar": "https://cdn.payga.me/avatar/2026/04/26/Shadow4ve_avatar.jpg",
+        "rating": 0.0,
+        "reaction": true,
+        "extra": {},
+        "review_count": 0,
+        "notifications": {
+          "telegram": true
+        },
+        "plan": {
+          "id": 16,
+          "title": "Новичок+",
+          "slug": "freeplus",
+          "image": "https://cdn.payga.me/plan/2025/12/12/newbie_Ijrszum_1.svg"
+        }
+      },
+      "title": "Личный аккаунт без привязок, 58 AR. Леги - 22 (Перс + оружия + Созвездие)",
+      "game": {
+        "title": "Genshin Impact",
+        "cover": "https://cdn.payga.me/cover/2021/09/17/genshin-art.jpg",
+        "icon": "https://cdn.payga.me/icon/2023/10/19/icon-genshin-impact.svg",
+        "slug": "genshin-impact",
+        "id": 22
+      },
+      "game_server": [
+        {
+          "title": "Европа",
+          "slug": "genshin-europe",
+          "id": 1202,
+          "region": {
+            "id": 2,
+            "title": "Europe",
+            "slug": "eu",
+            "code_alpha": "EU"
+          }
+        }
+      ],
+      "offer_type": {
+        "id": 2,
+        "variant": "account",
+        "name": "Аккаунты",
+        "position": 3,
+        "slug": "account"
+      },
+      "category": {},
+      "item": {},
+      "quantity": 1.0,
+      "minimal_quantity": 1.0,
+      "price": "2400.00",
+      "image": {
+        "id": 996731,
+        "image": "https://cdn.payga.me/offers/2026/4/26/480225/506968/99b01f83f8f7839bb574f4c69043c3ab.image.jpg",
+        "meta": {
+          "width": 1375,
+          "height": 1248
+        },
+        "preview": "https://cdn.payga.me/offers/2026/4/26/480225/506968/99b01f83f8f7839bb574f4c69043c3ab.preview.jpg",
+        "completed": true
+      },
+      "props_data": [
+        {
+          "id": 6508960,
+          "prop": {
+            "id": 138,
+            "name": "Гарантия продавца",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 4443,
+            "value": "Пожизненная",
+            "int_value": null,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6508961,
+          "prop": {
+            "id": 129,
+            "name": "Смена данных",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": true,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 4227,
+            "value": "Полная",
+            "int_value": null,
+            "icon": "https://cdn.payga.me/prop/2023/02/19/d-full.png",
+            "is_any": false
+          }
+        },
+        {
+          "id": 6508962,
+          "prop": {
+            "id": 233,
+            "name": "Неролл",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": false
+          },
+          "val": {
+            "id": 94918,
+            "value": "Нет",
+            "int_value": null,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6508963,
+          "prop": {
+            "id": 74,
+            "name": "AR",
+            "type": "number",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": true,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": false
+          },
+          "val": {
+            "id": 852,
+            "value": null,
+            "int_value": 58,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6508964,
+          "prop": {
+            "id": 124,
+            "name": "В аренду",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": false,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 37020,
+            "value": "Нет",
+            "int_value": null,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6508965,
+          "prop": {
+            "id": 218,
+            "name": "Леги",
+            "type": "number",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": false
+          },
+          "val": {
+            "id": 91813,
+            "value": null,
+            "int_value": 22,
+            "icon": null,
+            "is_any": false
+          }
+        }
+      ],
+      "is_active": true,
+      "is_frozen": false,
+      "created_date": "2026-04-26T08:30:38.325836+00:00",
+      "pack": 1,
+      "last_raised": "2026-04-26T21:12:05.095166+00:00",
+      "xl_date": null,
+      "unlimited": false,
+      "auto_delivery": true
+    },
+    {
+      "id": 507094,
+      "seller": {
+        "id": 480430,
+        "username": "Ud2hflol",
+        "avatar": "https://cdn.payga.me/avatar/2026/04/26/Ud2hflol_avatar.png",
+        "rating": 0.0,
+        "reaction": false,
+        "extra": {},
+        "review_count": 0,
+        "notifications": {
+          "telegram": false
+        },
+        "plan": {
+          "id": 16,
+          "title": "Новичок+",
+          "slug": "freeplus",
+          "image": "https://cdn.payga.me/plan/2025/12/12/newbie_Ijrszum_1.svg"
+        }
+      },
+      "title": "57AR.перепривязка_22 лег. Перс, 12 лег. Оруж. Невелет с3 + сигна,ху-тао с2 +сигна р2, тигнари с3, и много хороших пачек",
+      "game": {
+        "title": "Genshin Impact",
+        "cover": "https://cdn.payga.me/cover/2021/09/17/genshin-art.jpg",
+        "icon": "https://cdn.payga.me/icon/2023/10/19/icon-genshin-impact.svg",
+        "slug": "genshin-impact",
+        "id": 22
+      },
+      "game_server": [
+        {
+          "title": "Европа",
+          "slug": "genshin-europe",
+          "id": 1202,
+          "region": {
+            "id": 2,
+            "title": "Europe",
+            "slug": "eu",
+            "code_alpha": "EU"
+          }
+        }
+      ],
+      "offer_type": {
+        "id": 2,
+        "variant": "account",
+        "name": "Аккаунты",
+        "position": 3,
+        "slug": "account"
+      },
+      "category": {},
+      "item": {},
+      "quantity": 1.0,
+      "minimal_quantity": 1.0,
+      "price": 3700.0,
+      "image": {
+        "id": 997029,
+        "image": "https://cdn.payga.me/offers/2026/4/26/480430/507094/1a525b8c936f3f347f1e23b91dc6055d.image.jpg",
+        "meta": {
+          "width": 1920,
+          "height": 864
+        },
+        "preview": "https://cdn.payga.me/offers/2026/4/26/480430/507094/1a525b8c936f3f347f1e23b91dc6055d.preview.jpg",
+        "completed": true
+      },
+      "props_data": [
+        {
+          "id": 6508111,
+          "prop": {
+            "id": 129,
+            "name": "Смена данных",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": true,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 4227,
+            "value": "Полная",
+            "int_value": null,
+            "icon": "https://cdn.payga.me/prop/2023/02/19/d-full.png",
+            "is_any": false
+          }
+        },
+        {
+          "id": 6508112,
+          "prop": {
+            "id": 138,
+            "name": "Гарантия продавца",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 4433,
+            "value": "1 день",
+            "int_value": null,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6508113,
+          "prop": {
+            "id": 233,
+            "name": "Неролл",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": false
+          },
+          "val": {
+            "id": 94918,
+            "value": "Нет",
+            "int_value": null,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6508114,
+          "prop": {
+            "id": 74,
+            "name": "AR",
+            "type": "number",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": true,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": false
+          },
+          "val": {
+            "id": 620,
+            "value": null,
+            "int_value": 57,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6508115,
+          "prop": {
+            "id": 124,
+            "name": "В аренду",
+            "type": "list",
+            "show_filter": true,
+            "show_columns": false,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": true
+          },
+          "val": {
+            "id": 37020,
+            "value": "Нет",
+            "int_value": null,
+            "icon": null,
+            "is_any": false
+          }
+        },
+        {
+          "id": 6508116,
+          "prop": {
+            "id": 218,
+            "name": "Леги",
+            "type": "number",
+            "show_filter": true,
+            "show_columns": true,
+            "show_offer_title": false,
+            "show_before_title": false,
+            "show_offer_title_icon": false,
+            "is_required": false
+          },
+          "val": {
+            "id": 91635,
+            "value": null,
+            "int_value": 34,
+            "icon": null,
+            "is_any": false
+          }
+        }
+      ],
+      "is_active": true,
+      "is_frozen": false,
+      "created_date": "2026-04-26T13:17:33.570247+00:00",
+      "pack": 1,
+      "last_raised": "2026-04-26T21:10:18.610417+00:00",
+      "xl_date": null,
+      "unlimited": false,
+      "auto_delivery": false
+    }
+  ]
+}

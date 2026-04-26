@@ -12,6 +12,7 @@ import argparse
 import datetime as _dt
 import os
 import sys
+import time
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -32,6 +33,21 @@ from common import (  # noqa: E402
 DEFAULT_REPORT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report.md")
 
 
+def _fmt_ago(ts: int | None, now: int | None = None) -> str:
+    if not ts:
+        return ""
+    if now is None:
+        now = int(time.time())
+    delta = max(0, int(now) - int(ts))
+    if delta < 60:
+        return "только что"
+    if delta < 3600:
+        return f"{delta // 60}м назад"
+    if delta < 86400:
+        return f"{delta // 3600}ч назад"
+    return f"{delta // 86400}д назад"
+
+
 def _fmt_item_md(a: dict[str, Any], is_drop: bool = False) -> list[str]:
     ar = a.get("ar", "?")
     price = a.get("price_rub")
@@ -46,8 +62,11 @@ def _fmt_item_md(a: dict[str, Any], is_drop: bool = False) -> list[str]:
     desc = (a.get("desc") or "").strip()
     desc_short = desc[:180]
     url = a.get("url", "")
+    ago = _fmt_ago(a.get("_created_ts") or a.get("_first_seen_ts"))
     lines: list[str] = []
     head = f"- **AR{ar}** · **{price_s}**{tag} · {source} · server: {server}"
+    if ago:
+        head += f" · 🕒 {ago}"
     if mail:
         head += f" · 📧 {mail}"
     head += f" · 👤 {seller}"
@@ -124,10 +143,15 @@ def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_a
             f"cat2: AR {CAT2_AR_MIN}-{CAT2_AR_MAX}, ≤ {int(CAT2_MAX_PRICE)}₽, только с ивентовыми 5★",
             data["new_cat2"], data["drop_cat2"], len(data["cat2"]),
         ))
-        lines.append(
+        meta = (
             f"> 📊 всего сырых лотов {data['total_raw']}, "
             f"прошло фильтры: {len(data['cat1'])}+{len(data['cat2'])}"
         )
+        if not data.get("ok", True):
+            meta += " · ⚠️ источник вернул ошибку (данные неполные)"
+        if data.get("pruned"):
+            meta += f" · seen pruned: {data['pruned']}"
+        lines.append(meta)
         lines.append("")
 
     lines.append("---")
@@ -183,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     empty = {
         "source": "", "total_raw": 0, "cat1": [], "cat2": [],
         "new_cat1": [], "new_cat2": [], "drop_cat1": [], "drop_cat2": [],
-        "first_run": False,
+        "first_run": False, "ok": True,
     }
     fp_data = dict(empty)
     pg_data = dict(empty)
@@ -204,7 +228,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[report] не удалось записать {args.out}: {e}", file=sys.stderr)
 
     print(_short_console_summary(fp_data, pg_data, args.out))
-    return 0
+    # ненулевой код, если хотя бы один источник провалился
+    fp_ok = fp_data.get("ok", True)
+    pg_ok = pg_data.get("ok", True)
+    return 0 if (fp_ok and pg_ok) else 2
 
 
 if __name__ == "__main__":

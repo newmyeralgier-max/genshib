@@ -2,18 +2,26 @@
 """
 Мониторинг PayGame — аккаунты Genshin Impact.
 
-Парсинг через Schema.org `application/ld+json` (ItemList) — устойчив
-к смене авто-генерируемых CSS-классов Next.js. Сервер берётся из HTML
-возле карточки (JSON-LD его не содержит).
+Работает через публичный JSON-API площадки:
+`https://api.paygame.ru/api/v1/offers/item-offer/` с курсорной
+пагинацией (параметр `next` в ответе — base64-токен checkpoint-а).
+
+Это даёт:
+- полный обход витрины за ~10 запросов (size=100, ~1000 лотов),
+  вместо 25 штук из первой страницы JSON-LD;
+- готовые структурированные поля — без ручного парсинга CSS / JSON-LD:
+  price (₽), game_server, props_data[AR / Неролл / Смена данных / Леги],
+  created_date, last_raised, seller.username, title.
 
 Фильтрация — та же, что для FunPay (см. genshin_monitor.py).
 """
 from __future__ import annotations
 
-import json
+import datetime as _dt
 import os
-import re
 import sys
+import time
+import urllib.parse
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -26,156 +34,162 @@ from common import (  # noqa: E402
     CAT2_AR_MIN,
     CAT2_MAX_PRICE,
     CAT2_MIN_PRICE,
-    fetch,
+    fetch_json,
     has_event_5star,
     is_europe,
     is_garbage,
     load_seen,
+    prune_seen,
     save_seen,
     update_seen,
 )
 
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paygame_seen.json")
-PAYGAME_URL = "https://paygame.ru/games/genshin-impact/offers?type=account"
+STATE_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "paygame_seen.json"
+)
+
+API_BASE = "https://api.paygame.ru/api/v1/offers/item-offer/"
+API_QUERY_BASE = "game=genshin-impact&type=account&size=100"
+# Жёсткий потолок страниц — страховка от бесконечной петли, если
+# API однажды сломает пагинацию. 50 страниц × 100 = 5000 лотов,
+# при реальных ~1000 лотов это заведомо достаточно.
+MAX_PAGES = 50
 
 
-# --- JSON-LD helpers ------------------------------------------------
-def _find_item_list(node: Any) -> dict[str, Any] | None:
-    if isinstance(node, dict):
-        if node.get("@type") == "ItemList":
-            return node
-        for v in node.values():
-            r = _find_item_list(v)
-            if r is not None:
-                return r
-    elif isinstance(node, list):
-        for v in node:
-            r = _find_item_list(v)
-            if r is not None:
-                return r
+def _api_url(cursor: str | None = None) -> str:
+    base = f"{API_BASE}?{API_QUERY_BASE}"
+    if cursor:
+        return f"{base}&cursor={urllib.parse.quote(cursor)}"
+    return base
+
+
+def _extract_prop(props: list[dict[str, Any]], name: str) -> Any:
+    """Вытащить из props_data значение проп-а с именем `name`."""
+    for p in props or []:
+        prop = p.get("prop") or {}
+        if prop.get("name") == name:
+            v = p.get("val")
+            if isinstance(v, dict):
+                # int_value приоритетнее — это "честное" число
+                iv = v.get("int_value")
+                if iv is not None:
+                    return iv
+                return v.get("value")
+            return v
     return None
 
 
-def _parse_desc_attrs(description: str) -> dict[str, str]:
+def _parse_iso(ts: str | None) -> int | None:
+    """ISO-8601 → unix timestamp (секунды). None если не получилось."""
+    if not ts:
+        return None
+    try:
+        # Python 3.11 умеет `fromisoformat` с 'Z' и миллисекундами.
+        # Для совместимости с 3.10 подменяем финальный 'Z' на '+00:00'.
+        s = ts.replace("Z", "+00:00")
+        return int(_dt.datetime.fromisoformat(s).timestamp())
+    except Exception:
+        return None
+
+
+def fetch_all_offers(max_pages: int = MAX_PAGES) -> tuple[list[dict[str, Any]], bool]:
     """
-    Из описания JSON-LD извлекаем хвост после "Аккаунты Genshin Impact." —
-    именно там лежат атрибуты вида "Ключ: значение; Ключ: значение".
+    Обойти витрину PayGame через cursor-API. Возвращает
+    (все_найденные_результаты, успех_прохода). При ошибке сети на
+    первой же странице возвращает ([], False); если падение произошло
+    посередине — отдаёт что успели набрать + `False`, чтобы вызывающий
+    знал, что данные неполные.
     """
-    m = re.search(r"Аккаунты Genshin Impact\.\s*(.*)$", description or "")
-    tail = m.group(1) if m else (description or "")
-    out: dict[str, str] = {}
-    for part in tail.split(";"):
-        if ":" in part:
-            k, _, v = part.partition(":")
-            out[k.strip()] = v.strip()
-    return out
-
-
-def _server_from_html(html: str, offer_id: str) -> str:
-    """
-    Найти значок сервера в HTML рядом с `href="/offers/<id>"`.
-    Структура: `<span>Сервер<!-- -->:</span><span>Европа</span>`.
-
-    Важно: в HTML ссылка на оффер встречается несколько раз (JSON-LD,
-    schema.org Product, и сама карточка). Нам нужна именно карточка —
-    ищем через `href="/offers/<id>"`.
-    """
-    idx = html.find(f'href="/offers/{offer_id}"')
-    if idx < 0:
-        # fallback на любую упоминание — маловероятно, но вдруг разметка сменилась
-        idx = html.find(f'/offers/{offer_id}')
-        if idx < 0:
-            return ""
-    ctx = html[idx: idx + 3000]
-    m = re.search(
-        r"Сервер(?:<!--[^>]*-->)?\s*:\s*</span>\s*<span[^>]*>([^<]+)</span>",
-        ctx,
-    )
-    if m:
-        return m.group(1).strip()
-    # fallback — просто найти слово
-    m2 = re.search(r"(Европа|Азия|Америка|США|EU|ASIA|AM)", ctx)
-    return m2.group(1) if m2 else ""
-
-
-def parse_paygame(html: str | None = None) -> list[dict[str, Any]]:
-    if html is None:
-        html = fetch(PAYGAME_URL)
-    if not html:
-        return []
-
-    # Все JSON-LD блоки, ищем среди них ItemList (вложенный в CollectionPage).
-    blocks = re.findall(
-        r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>',
-        html,
-        re.DOTALL,
-    )
-    items_meta: list[dict[str, Any]] = []
-    for b in blocks:
-        try:
-            parsed = json.loads(b)
-        except Exception:
-            continue
-        il = _find_item_list(parsed)
-        if il:
-            items_meta = il.get("itemListElement", []) or []
-            break
-
     results: list[dict[str, Any]] = []
-    for entry in items_meta:
-        p = entry.get("item") or {}
-        url = p.get("url", "")
-        offer_id = url.rsplit("/", 1)[-1] if url else ""
-        if not offer_id:
+    cursor: str | None = None
+    seen_ids: set[int] = set()
+    for page in range(max_pages):
+        url = _api_url(cursor)
+        data = fetch_json(url)
+        if not isinstance(data, dict):
+            return results, False
+        page_results = data.get("results") or []
+        if not page_results:
+            break
+        for it in page_results:
+            iid = it.get("id")
+            if iid in seen_ids:
+                # страховка от зацикливания на одном курсоре
+                continue
+            seen_ids.add(iid)
+            results.append(it)
+        nxt = data.get("next")
+        if not nxt:
+            break
+        # API возвращает `next` как чистый токен-курсор (base64),
+        # но иногда (в других эндпоинтах) приходит полная ссылка.
+        if isinstance(nxt, str) and nxt.startswith("http"):
+            # не поддерживаем — чтобы не ходить наружу.
+            return results, True
+        cursor = nxt
+    return results, True
+
+
+def parse_paygame(items: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """
+    Преобразовать ответ API в плоский список, пригодный для categorize().
+    Если items не передан — сходить в API и собрать всё.
+    """
+    if items is None:
+        items, _ok = fetch_all_offers()
+
+    out: list[dict[str, Any]] = []
+    for r in items:
+        iid = r.get("id")
+        if iid is None:
             continue
+        iid = str(iid)
 
-        name = (p.get("name") or "").strip()
-        description = (p.get("description") or "").strip()
-        attrs = _parse_desc_attrs(description)
+        servers = [s.get("title") for s in (r.get("game_server") or []) if s]
+        server = servers[0] if servers else ""
 
-        ar = None
-        ar_raw = attrs.get("AR", "")
-        m = re.search(r"(\d+)", ar_raw)
-        if m:
-            ar = int(m.group(1))
-        if ar is None:
-            # fallback — ищем в имени/описании
-            m = re.search(r"AR\s*[:\-]?\s*(\d+)", description, re.I)
-            if m:
-                ar = int(m.group(1))
-
-        offer = p.get("offers") or {}
-        price_val = offer.get("price")
-        currency = offer.get("priceCurrency", "RUB")
-        price_rub = None
+        ar_raw = _extract_prop(r.get("props_data"), "AR")
+        ar: int | None = None
         try:
-            if price_val is not None and str(currency).upper() == "RUB":
-                price_rub = float(price_val)
+            if ar_raw is not None:
+                ar = int(ar_raw)
         except Exception:
-            pass
+            ar = None
 
-        seller = ((offer.get("seller") or {}).get("name") or "").strip() or "?"
-        server = _server_from_html(html, offer_id)
+        neroll_raw = _extract_prop(r.get("props_data"), "Неролл")
+        neroll = str(neroll_raw or "").strip().lower() in ("да", "yes", "true")
 
-        # Объединяем name + description в полный текст для фильтров 5★.
-        full_text = f"{name}. {description}"
+        title = (r.get("title") or "").strip()
 
-        neroll = (attrs.get("Неролл", "").lower() == "да")
+        price_raw = r.get("price")
+        price_rub: float | None = None
+        try:
+            if price_raw is not None:
+                price_rub = float(price_raw)
+        except Exception:
+            price_rub = None
 
-        results.append({
+        created_ts = _parse_iso(r.get("created_date"))
+        raised_ts = _parse_iso(r.get("last_raised"))
+
+        seller = ((r.get("seller") or {}).get("username") or "").strip() or "?"
+
+        out.append({
             "source": "PayGame",
-            "id": offer_id,
+            "id": iid,
             "ar": ar,
             "server": server,
-            "desc": name if name else description,
-            "desc_full": full_text,
+            "desc": title,
+            "desc_full": title,
             "neroll": neroll,
-            "price_orig": f"{price_val} ₽" if price_val is not None else "",
+            "price_orig": f"{price_raw} ₽" if price_raw is not None else "",
             "price_rub": price_rub,
             "seller": seller,
-            "url": url,
+            "url": f"https://paygame.ru/offers/{iid}",
+            "_created_ts": created_ts,
+            "_raised_ts": raised_ts,
         })
-    return results
+    return out
 
 
 def _passes_common(a: dict[str, Any]) -> bool:
@@ -216,7 +230,8 @@ def categorize(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[
 
 
 def run(reset: bool = False) -> dict[str, Any]:
-    raw = parse_paygame()
+    raw_api, ok = fetch_all_offers()
+    raw = parse_paygame(raw_api)
     cat1, cat2 = categorize(raw)
 
     if reset and os.path.exists(STATE_FILE):
@@ -229,6 +244,7 @@ def run(reset: bool = False) -> dict[str, Any]:
     )
 
     seen = seen_before
+    pruned = prune_seen(seen)
     new_cat1, drop_cat1 = update_seen(seen, "cat1", cat1)
     new_cat2, drop_cat2 = update_seen(seen, "cat2", cat2)
     save_seen(STATE_FILE, seen)
@@ -236,6 +252,16 @@ def run(reset: bool = False) -> dict[str, Any]:
     if first_run:
         new_cat1, new_cat2 = [], []
         drop_cat1, drop_cat2 = [], []
+
+    # Новые — сортируем по created_date DESC (самые свежие сверху),
+    # а если timestamp-а нет — по first_seen (обратной совместимостью).
+    def _sort_key_new(x: dict[str, Any]) -> int:
+        return -int(x.get("_created_ts") or x.get("_first_seen_ts") or 0)
+
+    new_cat1.sort(key=_sort_key_new)
+    new_cat2.sort(key=_sort_key_new)
+    drop_cat1.sort(key=lambda x: -float(x.get("_drop_pct", 0) or 0))
+    drop_cat2.sort(key=lambda x: -float(x.get("_drop_pct", 0) or 0))
 
     return {
         "source": "PayGame",
@@ -247,6 +273,8 @@ def run(reset: bool = False) -> dict[str, Any]:
         "drop_cat1": drop_cat1,
         "drop_cat2": drop_cat2,
         "first_run": first_run,
+        "pruned": pruned,
+        "ok": ok and len(raw) > 0,
     }
 
 
@@ -268,20 +296,30 @@ def _format_report(data: dict[str, Any]) -> str:
             if new_items:
                 lines.append("  [NEW]")
                 for i, a in enumerate(new_items[:25]):
+                    ar = a.get("ar", "?")
+                    ts = a.get("_created_ts")
+                    ago = ""
+                    if ts:
+                        delta = max(0, int(time.time()) - int(ts))
+                        if delta < 3600:
+                            ago = f" [{delta // 60}м назад]"
+                        elif delta < 86400:
+                            ago = f" [{delta // 3600}ч назад]"
+                        else:
+                            ago = f" [{delta // 86400}д назад]"
                     lines.append(
-                        f"    {i+1}. AR{a['ar']} | {a['price_rub']:.0f}₽ | "
-                        f"👤 {a.get('seller','?')} | {a.get('server','?')}"
+                        f"    {i+1}. AR{ar} | {a['price_rub']:.0f}₽{ago} | {a.get('server','?')}"
                     )
-                    lines.append(f"       {a['desc'][:120]}")
+                    lines.append(f"       {a.get('desc','')[:120]}")
                     lines.append(f"       🔗 {a['url']}")
             if drops:
                 lines.append("  [↓ цена упала]")
                 for i, a in enumerate(drops[:25]):
                     lines.append(
-                        f"    {i+1}. AR{a['ar']} | {a['price_rub']:.0f}₽"
+                        f"    {i+1}. AR{a.get('ar','?')} | {a['price_rub']:.0f}₽"
                         f" (было {a['_prev_price']:.0f}₽, −{a['_drop_pct']}%)"
                     )
-                    lines.append(f"       {a['desc'][:120]}")
+                    lines.append(f"       {a.get('desc','')[:120]}")
                     lines.append(f"       🔗 {a['url']}")
             if not new_items and not drops:
                 lines.append("  ничего нового")
@@ -292,7 +330,7 @@ def _format_report(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     import argparse
 
     p = argparse.ArgumentParser(description="PayGame monitor — Genshin accounts")
@@ -301,6 +339,7 @@ def main(argv: list[str] | None = None) -> None:
 
     data = run(reset=args.reset)
     print(_format_report(data))
+    return 0 if data.get("ok") else 2
 
 
 if __name__ == "__main__":
@@ -310,4 +349,4 @@ if __name__ == "__main__":
             sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
         except Exception:
             pass
-    main()
+    sys.exit(main())
