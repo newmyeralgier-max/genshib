@@ -147,6 +147,8 @@ def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_a
             f"> 📊 всего сырых лотов {data['total_raw']}, "
             f"прошло фильтры: {len(data['cat1'])}+{len(data['cat2'])}"
         )
+        if data.get("rentals_filtered"):
+            meta += f" · аренд отсеяно: {data['rentals_filtered']}"
         if not data.get("ok", True):
             meta += " · ⚠️ источник вернул ошибку (данные неполные)"
         if data.get("pruned"):
@@ -176,6 +178,24 @@ def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_a
     return "\n".join(lines)
 
 
+def _open_in_default_app(path: str) -> None:
+    """
+    Открыть файл в дефолтном приложении ОС. На Windows запускается
+    через `start "" path`, что подхватит зарегистрированный для .md
+    хэндлер (например, Antigravity).
+    """
+    import subprocess
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+    except Exception as e:
+        print(f"[open] не удалось открыть {path}: {e}", file=sys.stderr)
+
+
 def _short_console_summary(fp: dict[str, Any], pg: dict[str, Any], report_path: str) -> str:
     def _counts(d: dict[str, Any]) -> str:
         if d["first_run"]:
@@ -202,7 +222,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--only", choices=["funpay", "paygame"], default=None,
                         help="запустить только один сайт")
+    parser.add_argument("--debug", action="store_true",
+                        help="выводить постраничный прогресс PayGame API")
+    parser.add_argument("--open", action="store_true",
+                        dest="open_after",
+                        help="открыть отчёт в дефолтном приложении после генерации (Windows: start, macOS: open, Linux: xdg-open)")
     args = parser.parse_args(argv)
+    if args.debug:
+        os.environ["GENSHIB_DEBUG"] = "1"
 
     empty = {
         "source": "", "total_raw": 0, "cat1": [], "cat2": [],
@@ -228,6 +255,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[report] не удалось записать {args.out}: {e}", file=sys.stderr)
 
     print(_short_console_summary(fp_data, pg_data, args.out))
+
+    if args.open_after:
+        _open_in_default_app(args.out)
+
     # ненулевой код, если хотя бы один источник провалился
     fp_ok = fp_data.get("ok", True)
     pg_ok = pg_data.get("ok", True)

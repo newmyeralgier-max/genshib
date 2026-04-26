@@ -93,6 +93,34 @@ class TestPayGameParser(unittest.TestCase):
         for it in self.items:
             self.assertIsInstance(it["neroll"], bool)
 
+    def test_is_rental_extracted(self) -> None:
+        # Поле is_rental проставляется на каждом лоте (True/False).
+        for it in self.items:
+            self.assertIsInstance(it["is_rental"], bool)
+
+    def test_rental_synthetic(self) -> None:
+        # Synthetic record: «В аренду=Да» → is_rental=True.
+        synth = [{
+            "id": 99999,
+            "title": "Хороший аккаунт в аренду",
+            "price": 500.0,
+            "game_server": [{"title": "Европа"}],
+            "seller": {"username": "x"},
+            "props_data": [
+                {"prop": {"name": "AR"}, "val": {"int_value": 60}},
+                {"prop": {"name": "В аренду"}, "val": {"value": "Да"}},
+                {"prop": {"name": "Часов аренды"}, "val": {"int_value": 72}},
+            ],
+            "created_date": None, "last_raised": None,
+        }]
+        out = paygame_monitor.parse_paygame(synth)
+        self.assertEqual(len(out), 1)
+        self.assertTrue(out[0]["is_rental"])
+        # В categorize аренда не должна попасть ни в cat1, ни в cat2.
+        c1, c2 = paygame_monitor.categorize(out)
+        self.assertEqual(len(c1), 0)
+        self.assertEqual(len(c2), 0)
+
     def test_created_ts_parsed(self) -> None:
         for it in self.items:
             ts = it.get("_created_ts")

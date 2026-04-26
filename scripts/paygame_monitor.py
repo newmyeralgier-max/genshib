@@ -93,25 +93,40 @@ def _parse_iso(ts: str | None) -> int | None:
         return None
 
 
-def fetch_all_offers(max_pages: int = MAX_PAGES) -> tuple[list[dict[str, Any]], bool]:
+def fetch_all_offers(
+    max_pages: int = MAX_PAGES,
+    *,
+    verbose: bool = False,
+) -> tuple[list[dict[str, Any]], bool]:
     """
     Обойти витрину PayGame через cursor-API. Возвращает
     (все_найденные_результаты, успех_прохода). При ошибке сети на
     первой же странице возвращает ([], False); если падение произошло
     посередине — отдаёт что успели набрать + `False`, чтобы вызывающий
     знал, что данные неполные.
+
+    `verbose=True` (или env GENSHIB_DEBUG=1) печатает прогресс
+    «страница N: K лотов».
     """
+    if not verbose and os.environ.get("GENSHIB_DEBUG") == "1":
+        verbose = True
     results: list[dict[str, Any]] = []
     cursor: str | None = None
     seen_ids: set[int] = set()
+    expected_total: int | None = None
     for page in range(max_pages):
         url = _api_url(cursor)
         data = fetch_json(url)
         if not isinstance(data, dict):
+            if verbose:
+                print(f"[paygame] страница {page+1}: ОШИБКА (network)")
             return results, False
         page_results = data.get("results") or []
+        if expected_total is None:
+            expected_total = data.get("count")
         if not page_results:
             break
+        added = 0
         for it in page_results:
             iid = it.get("id")
             if iid in seen_ids:
@@ -119,7 +134,11 @@ def fetch_all_offers(max_pages: int = MAX_PAGES) -> tuple[list[dict[str, Any]], 
                 continue
             seen_ids.add(iid)
             results.append(it)
+            added += 1
         nxt = data.get("next")
+        if verbose:
+            mark = "next" if nxt else "конец"
+            print(f"[paygame] страница {page+1}: {added} лотов, {mark}")
         if not nxt:
             break
         # API возвращает `next` как чистый токен-курсор (base64),
@@ -128,6 +147,11 @@ def fetch_all_offers(max_pages: int = MAX_PAGES) -> tuple[list[dict[str, Any]], 
             # не поддерживаем — чтобы не ходить наружу.
             return results, True
         cursor = nxt
+    if verbose and expected_total is not None:
+        print(
+            f"[paygame] итог: страниц={page + 1}, лотов={len(results)}, "
+            f"count_по_API={expected_total}"
+        )
     return results, True
 
 
@@ -160,6 +184,13 @@ def parse_paygame(items: list[dict[str, Any]] | None = None) -> list[dict[str, A
         neroll_raw = _extract_prop(r.get("props_data"), "Неролл")
         neroll = str(neroll_raw or "").strip().lower() in ("да", "yes", "true")
 
+        # Аренда: либо явный флаг «В аренду: Да», либо выставлено
+        # «Часов аренды» (редкий крайний случай, когда селлер ставит
+        # флаг в «Нет», но всё равно указывает часы).
+        rental_flag = str(_extract_prop(r.get("props_data"), "В аренду") or "").strip().lower()
+        rental_hours = _extract_prop(r.get("props_data"), "Часов аренды")
+        is_rental = rental_flag in ("да", "yes", "true") or rental_hours is not None
+
         title = (r.get("title") or "").strip()
 
         price_raw = r.get("price")
@@ -183,6 +214,7 @@ def parse_paygame(items: list[dict[str, Any]] | None = None) -> list[dict[str, A
             "desc": title,
             "desc_full": title,
             "neroll": neroll,
+            "is_rental": is_rental,
             "price_orig": f"{price_raw} ₽" if price_raw is not None else "",
             "price_rub": price_rub,
             "seller": seller,
@@ -197,6 +229,9 @@ def _passes_common(a: dict[str, Any]) -> bool:
     if not is_europe(a.get("server", "")):
         return False
     if a.get("neroll"):
+        return False
+    # Нам нужны продажи, а не аренда аккаунтов.
+    if a.get("is_rental"):
         return False
     if is_garbage(a.get("desc_full") or a.get("desc", "")):
         return False
@@ -266,9 +301,12 @@ def run(reset: bool = False) -> dict[str, Any]:
     drop_cat1.sort(key=lambda x: -float(x.get("_drop_pct", 0) or 0))
     drop_cat2.sort(key=lambda x: -float(x.get("_drop_pct", 0) or 0))
 
+    rentals_filtered = sum(1 for a in raw if a.get("is_rental"))
+
     return {
         "source": "PayGame",
         "total_raw": len(raw),
+        "rentals_filtered": rentals_filtered,
         "cat1": cat1,
         "cat2": cat2,
         "new_cat1": new_cat1,
