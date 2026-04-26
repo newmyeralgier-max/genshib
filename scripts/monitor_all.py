@@ -31,8 +31,12 @@ from common import (  # noqa: E402
     CAT2_MIN_PRICE,
 )
 
-# Порог «горячего» лота для тега в .md.
+# Порог «горячего» лота для тега в .md (гл. 2).
 HOT_DISCOUNT_THRESHOLD = float(os.environ.get("GENSHIB_HOT_THRESHOLD", "30"))
+
+# Параметры топ-блока в шапке отчёта (гл. 6).
+HOT_TOP_THRESHOLD = float(os.environ.get("GENSHIB_HOT_TOP_THRESHOLD", "20"))
+HOT_TOP_N = int(os.environ.get("GENSHIB_HOT_TOP_N", "10"))
 
 DEFAULT_REPORT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report.md")
 
@@ -151,6 +155,59 @@ def _section(
     return lines
 
 
+def hot_pick(
+    fp_data: dict[str, Any],
+    pg_data: dict[str, Any],
+    medians: dict[tuple[int | None, int], float],
+    *,
+    threshold: float = HOT_TOP_THRESHOLD,
+    n: int = HOT_TOP_N,
+) -> list[dict[str, Any]]:
+    """
+    Собрать самые «горячие» новые лоты с обоих источников.
+    Только из new_cat1/new_cat2 (иначе шапка дублирует общий список).
+    Сортировка — по дисконту DESC.
+    """
+    pool: list[dict[str, Any]] = []
+    for d, src in ((fp_data, "FunPay"), (pg_data, "PayGame")):
+        for cat in ("new_cat1", "new_cat2"):
+            for lot in d.get(cat) or []:
+                disc = match.discount_pct(lot, medians)
+                if disc is None or disc < threshold:
+                    continue
+                pool.append({**lot, "_disc": disc, "_cat": cat, "_src": src})
+    pool.sort(key=lambda x: -x["_disc"])
+    return pool[:n]
+
+
+def _format_hot_table(hot: list[dict[str, Any]]) -> list[str]:
+    """Markdown-таблица «🔥 Top-N hot lots»."""
+    if not hot:
+        return [
+            "## 🔥 Top hot lots",
+            "",
+            f"_сейчас горячих лотов нет (порог −{int(HOT_TOP_THRESHOLD)}%)._",
+            "",
+        ]
+    lines = ["## 🔥 Top hot lots", ""]
+    lines.append("| disc | source | AR | price | event 5★ | url |")
+    lines.append("|---|---|---|---|---|---|")
+    for h in hot:
+        ar = h.get("ar", "?")
+        price = h.get("price_rub")
+        ps = f"{price:.0f}₽" if isinstance(price, (int, float)) else "?"
+        _, chars, _ = match.fingerprint(h)
+        # Названия персонажей по-русски с большой буквы для читаемости.
+        chars_pretty = ", ".join(c.title() for c in sorted(chars)) or "—"
+        url = h.get("url", "") or ""
+        lines.append(
+            f"| -{h['_disc']:.0f}% | {h['_src']} | {ar} | {ps} | "
+            f"{chars_pretty} | {url} |"
+        )
+    lines.append("")
+    return lines
+
+
 def _build_context(fp_data: dict[str, Any], pg_data: dict[str, Any]) -> dict[str, Any]:
     """
     Построить вспомогательный контекст для отчёта:
@@ -186,6 +243,10 @@ def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_a
         "сервер Европа, обязательно хотя бы один ивентовый 5★, без нероллов, без мусора"
     )
     lines.append("")
+
+    # Топ-блок с горячими лотами (см. главу 6 в docs/roadmap.md).
+    hot = hot_pick(fp_data, pg_data, ctx_full["medians"])
+    lines.extend(_format_hot_table(hot))
 
     any_first_run = False
     for label, data in (("FunPay", fp_data), ("PayGame", pg_data)):
