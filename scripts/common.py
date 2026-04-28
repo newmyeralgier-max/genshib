@@ -41,33 +41,115 @@ STANDARD_5STAR = {
     "дехья", "dehya", "мидзуки", "midzuki", "мидуки",
 }
 
-EVENT_5STAR = {
-    "венди", "венти", "venti", "эола", "еола", "eula", "кадзуха", "kazuha",
-    "чжун ли", "чжунли", "zhongli", "гань юй", "ганьюй", "ganyu", "сяо", "xiao",
-    "ху тао", "хутао", "hu tao", "йоимия", "ёимия", "yoimiya",
-    "шэнь хэ", "шэньхэ", "шень хэ", "шеньхэ", "shenhe",
-    "аяка", "ayaka", "камисато", "райдэн", "райден", "raiden",
-    "аято", "ayato", "итто", "itto", "кокоми", "kokomi",
-    "яэ мико", "яэмико", "ямико", "yae miko",
-    "нахида", "nahida", "сайно", "cyno",
-    "вандерер", "wanderer", "скиталец", "странник", "альхаисам", "alhaitham",
-    "фурина", "furina", "фурин", "нёвиллет", "neuvillette", "невиллет",
-    "навия", "navia", "клоринда", "clorinde", "сигвин", "sigewinne",
-    "ризли", "рисли", "wriothesley", "линей", "lyney", "фремине", "freminet",
-    "муалани", "mualani", "кинич", "kinich", "часка", "chasca",
-    "мавуика", "mavuika", "ситлали", "citlali", "шилонен", "xilonen",
-    "арлекино", "arlecchino",
-    "тарталья", "tartaglia", "чайлд", "childe", "альбедо", "albedo",
-    "нилу", "nilou",
-    "эмилия", "emilie", "коломбина", "columbina", "инеффа", "иннефа",
-    "эскофье", "эскоф", "escoffier",
-    "тиори", "chiori", "скирк", "skirk",
-    "е лань", "елань", "yelan",
-    "линнея", "линея", "linnea",
-    "дурин", "durin",
-    "флинс", "flins",
-    "лаум", "laum",
-}
+# --- Группы алиасов 5★ ивентов ----------------------------------------
+# Источник правды — список групп. Каждая группа = все известные написания
+# одного и того же персонажа (рус. русский транслит, англ.). Нужно для
+# fingerprint в match.py: если в описании встречаются два разных написания
+# одного персонажа («Скирк (skirk)»), мы должны считать это ОДНИМ героем,
+# а не двумя — иначе ломается медиана рынка и jaccard-сравнение лотов.
+#
+# Канонический вариант для каждой группы — первый элемент группы (обычно
+# короткое русское написание). Подмена на каноническое имя делается в
+# match.fingerprint().
+#
+# ВАЖНО: «камисато» намеренно не включаем — это фамилия, ambiguous между
+# Аякой и Аято; чтобы не выдать ложный +1 к составу.
+EVENT_5STAR_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("венти", "венди", "venti"),
+    ("эола", "еола", "eula"),
+    ("кадзуха", "kazuha"),
+    ("чжунли", "чжун ли", "zhongli"),
+    ("ганьюй", "гань юй", "ganyu"),
+    ("сяо", "xiao"),
+    ("ху тао", "хутао", "hu tao"),
+    ("йоимия", "ёимия", "yoimiya"),
+    ("шэньхэ", "шэнь хэ", "шень хэ", "шеньхэ", "shenhe"),
+    ("аяка", "ayaka"),
+    ("райден", "райдэн", "raiden"),
+    ("аято", "ayato"),
+    ("итто", "itto"),
+    ("кокоми", "kokomi"),
+    ("яэ мико", "яэмико", "ямико", "yae miko"),
+    ("нахида", "nahida"),
+    ("сайно", "cyno"),
+    ("вандерер", "wanderer", "скиталец", "странник"),
+    ("альхаитам", "альхаисам", "alhaitham"),
+    ("фурина", "furina", "фурин"),
+    ("нёвиллет", "neuvillette", "невиллет"),
+    ("навия", "navia"),
+    ("клоринда", "clorinde"),
+    ("сигвин", "sigewinne"),
+    ("ризли", "рисли", "wriothesley"),
+    ("линей", "lyney"),
+    ("фремине", "freminet"),
+    ("муалани", "mualani"),
+    ("кинич", "kinich"),
+    ("часка", "chasca"),
+    ("мавуика", "mavuika"),
+    ("ситлали", "citlali"),
+    ("шилонен", "xilonen"),
+    ("арлекино", "arlecchino"),
+    ("тарталья", "tartaglia", "чайлд", "childe"),
+    ("альбедо", "albedo"),
+    ("нилу", "nilou"),
+    ("эмилия", "emilie"),
+    ("коломбина", "columbina", "инеффа", "иннефа"),
+    ("эскофье", "эскоф", "escoffier"),
+    ("тиори", "chiori"),
+    ("скирк", "skirk"),
+    ("елань", "е лань", "yelan"),
+    ("линнея", "линея", "linnea"),
+    ("дурин", "durin"),
+    ("флинс", "flins"),
+    ("лаум", "laum"),
+)
+
+# --- Толерантные алиасы (FunPay edge-case) ---------------------------
+# На FunPay часть продавцов пишет описания так, что первая буква имени
+# персонажа ВИЗУАЛЬНО заменена эмодзи (и в HTML тоже её нет):
+#   «Аяка⭐итлали⭐урина⭐ахида»  =  «Аяка ⭐ Ситлали ⭐ Фурина ⭐ Нахида»
+# Без специальной обработки fingerprint() пропускает этих персонажей.
+# Решение: для каждого алиаса длиной >= 5 русских букв добавляем вариант
+# с откушенной первой буквой («ситлали»→«итлали», «фурина»→«урина»),
+# и маппим его на тот же канонический. Английские алиасы НЕ режем
+# (англ. слова заметно короче и часто конфликтуют с обычными словами).
+# Алиасы короче 5 букв тоже не трогаем — слишком высокий шанс ложных
+# совпадений (например, «сяо»→«яо» матчилось бы внутри «яой»).
+def _has_cyrillic(s: str) -> bool:
+    return any("\u0400" <= ch <= "\u04ff" for ch in s)
+
+
+def _build_5star_canonical() -> tuple[frozenset[str], dict[str, str]]:
+    flat: set[str] = set()
+    canonical: dict[str, str] = {}
+    for group in EVENT_5STAR_GROUPS:
+        primary = group[0]
+        for alias in group:
+            flat.add(alias)
+            canonical[alias] = primary
+    # Второй проход — толерантные варианты (откушенная 1-я буква).
+    # Делаем после основного, чтобы не перезатереть прямые алиасы.
+    # Минимум 4 буквы у trimmed: это даёт «яка»→Аяка, «линс»→Флинс,
+    # но отсекает 3-буквенные хвосты типа «яо» от Сяо (слишком частый
+    # обрывок других слов).
+    for group in EVENT_5STAR_GROUPS:
+        primary = group[0]
+        for alias in group:
+            if not _has_cyrillic(alias):
+                continue
+            if len(alias) < 5:
+                continue
+            trimmed = alias[1:]
+            if len(trimmed) < 4:
+                continue
+            if trimmed in canonical:  # коллизия с другим алиасом — пропускаем
+                continue
+            flat.add(trimmed)
+            canonical[trimmed] = primary
+    return frozenset(flat), canonical
+
+
+EVENT_5STAR, EVENT_5STAR_CANONICAL = _build_5star_canonical()
 
 # --- стоп-слова мусора ----------------------------------------------
 # Эти фразы встречаются в "договорная цена" заглушках (2₽),
@@ -244,12 +326,16 @@ def fetch_json(url: str, timeout: int = 30, *, retries: int = 2) -> Any:
 
 
 # --- seen state -----------------------------------------------------
-# Новый формат:
-#   {"cat1": {"id": {"price": 123.0, "first_seen": 17..., "last_seen": 17...}},
-#    "cat2": {...}}
-# Старый формат (обратная совместимость):
-#   {"cat1": {"id": 123.0}, "cat2": {...}}
+# Поддерживаем три формата seen-файла, читаются прозрачно:
+#   v1 (legacy):      {"cat1": {"id": 123.0}, "cat2": {...}}
+#   v2:               {"cat1": {"id": {"price": 123.0, "first_seen": 17..., "last_seen": 17...}}, ...}
+#   v3 (текущий):     то же что v2 + опц. поле "history": [{"ts": 17..., "price": 123.0}, ...]
+# Запись всегда производится в формате v3.
 SEEN_TTL_SECONDS = int(os.environ.get("GENSHIB_SEEN_TTL", str(14 * 24 * 3600)))
+
+# Кап на длину истории. Не хочу, чтобы seen.json пухло на 1 МБ за месяц
+# при 1000+ лотов.
+SEEN_HISTORY_MAX = int(os.environ.get("GENSHIB_HISTORY_MAX", "50"))
 
 
 def load_seen(path: str) -> dict[str, dict[str, dict[str, Any]]]:
@@ -266,27 +352,63 @@ def load_seen(path: str) -> dict[str, dict[str, dict[str, Any]]]:
         src = raw.get(cat, {}) or {}
         for k, v in src.items():
             if isinstance(v, dict):
-                out[cat][k] = {
+                rec: dict[str, Any] = {
                     "price": v.get("price"),
                     "first_seen": v.get("first_seen"),
                     "last_seen": v.get("last_seen"),
                 }
+                # v2 → v3: если history нет, инициализируем её одной
+                # точкой по last_seen. Это не идеально (мы не знаем
+                # промежуточных цен), но даёт корректный «нижний край»
+                # тренда от которого пойдут будущие точки.
+                hist = v.get("history")
+                if isinstance(hist, list):
+                    rec["history"] = [
+                        x for x in hist
+                        if isinstance(x, dict)
+                        and isinstance(x.get("ts"), int)
+                    ][-SEEN_HISTORY_MAX:]
+                elif rec.get("price") is not None and rec.get("last_seen") is not None:
+                    rec["history"] = [
+                        {"ts": int(rec["last_seen"]), "price": rec["price"]}
+                    ]
+                else:
+                    rec["history"] = []
+                out[cat][k] = rec
             else:
-                # legacy: было просто число-цена
+                # v1: было просто число-цена — никакой истории, никаких ts.
                 out[cat][k] = {
                     "price": v,
                     "first_seen": None,
                     "last_seen": None,
+                    "history": [],
                 }
     return out
 
 
 def save_seen(path: str, seen: dict[str, dict[str, dict[str, Any]]]) -> None:
+    """Атомарно сохранить seen-файл.
+
+    Записываем во временный файл рядом с целевым, потом os.replace —
+    это не оставляет частично записанного seen.json при крэше скрипта
+    (на больших seen с историей запись неатомарна → если упасть в
+    середине, файл побьётся и придётся делать --reset). os.replace
+    атомарен на любых платформах, где запускается этот скрипт.
+    """
     try:
-        with open(path, "w", encoding="utf-8") as f:
+        d = os.path.dirname(os.path.abspath(path)) or "."
+        tmp = os.path.join(d, f".{os.path.basename(path)}.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(seen, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
     except Exception as e:
         print(f"[seen] ошибка сохранения {path}: {e}")
+        # подчищаем мусор, если он остался
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except Exception:
+            pass
 
 
 def update_seen(
@@ -317,7 +439,15 @@ def update_seen(
         price = it.get("price_rub")
         prev = bucket.get(iid)
         if prev is None:
-            bucket[iid] = {"price": price, "first_seen": now, "last_seen": now}
+            history: list[dict[str, Any]] = []
+            if price is not None:
+                history.append({"ts": now, "price": price})
+            bucket[iid] = {
+                "price": price,
+                "first_seen": now,
+                "last_seen": now,
+                "history": history,
+            }
             it2 = dict(it)
             it2["_first_seen_ts"] = now
             new_items.append(it2)
@@ -334,14 +464,67 @@ def update_seen(
                 it2["_drop_pct"] = round(
                     (1 - price / float(prev_price)) * 100.0, 1
                 )
+                # Прокидываем накопленную историю — пригодится в отчёте.
+                hist_copy = list(prev.get("history") or [])
+                if hist_copy:
+                    it2["_history"] = hist_copy
                 drops.append(it2)
             # цену обновляем только если она известна
             if price is not None:
                 prev["price"] = price
+                # дописать в history, если цена реально изменилась
+                hist = prev.setdefault("history", [])
+                last = hist[-1] if hist else None
+                if last is None or last.get("price") != price:
+                    hist.append({"ts": now, "price": price})
+                    if len(hist) > SEEN_HISTORY_MAX:
+                        # обрезаем по краю — самые старые точки уходят
+                        del hist[: len(hist) - SEEN_HISTORY_MAX]
             prev["last_seen"] = now
             if prev.get("first_seen") is None:
                 prev["first_seen"] = now
     return new_items, drops
+
+
+def mark_disappeared(
+    seen: dict[str, dict[str, dict[str, Any]]],
+    cat: str,
+    fresh_ids: set[str],
+    *,
+    grace_misses: int = 1,
+    source_ok: bool = True,
+) -> list[dict[str, Any]]:
+    """
+    Гл. 8: «исчезли = продали».
+
+    Для каждого id в seen[cat]:
+    - если id в fresh_ids → сбросить missed_runs=0;
+    - иначе инкрементировать missed_runs. Если он превысил
+      grace_misses (по умолч. 1 — т.е. на 2-м промахе) → считаем
+      «лот ушёл» и удаляем из seen, возвращаем запись в список.
+
+    source_ok=False (например, источник вернул ошибку или 0 лотов)
+    → ничего не делаем: мы не уверены, что список реально пуст.
+    Возвращаем пустой список, missed_runs не трогаем.
+    """
+    if not source_ok:
+        return []
+    bucket = seen.setdefault(cat, {})
+    out: list[dict[str, Any]] = []
+    for iid in list(bucket.keys()):
+        rec = bucket[iid]
+        if not isinstance(rec, dict):
+            continue
+        if iid in fresh_ids:
+            if rec.get("missed_runs"):
+                rec["missed_runs"] = 0
+            continue
+        misses = int(rec.get("missed_runs", 0)) + 1
+        rec["missed_runs"] = misses
+        if misses > grace_misses:
+            out.append({"id": iid, **rec})
+            del bucket[iid]
+    return out
 
 
 def prune_seen(
@@ -404,4 +587,5 @@ __all__ = [
     "save_seen",
     "update_seen",
     "prune_seen",
+    "mark_disappeared",
 ]

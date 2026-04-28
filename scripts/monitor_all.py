@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import genshin_monitor  # noqa: E402
 import paygame_monitor  # noqa: E402
+import match  # noqa: E402
 from common import (  # noqa: E402
     CAT1_AR_MAX,
     CAT1_AR_MIN,
@@ -29,6 +30,13 @@ from common import (  # noqa: E402
     CAT2_MAX_PRICE,
     CAT2_MIN_PRICE,
 )
+
+# Порог «горячего» лота для тега в .md (гл. 2).
+HOT_DISCOUNT_THRESHOLD = float(os.environ.get("GENSHIB_HOT_THRESHOLD", "30"))
+
+# Параметры топ-блока в шапке отчёта (гл. 6).
+HOT_TOP_THRESHOLD = float(os.environ.get("GENSHIB_HOT_TOP_THRESHOLD", "20"))
+HOT_TOP_N = int(os.environ.get("GENSHIB_HOT_TOP_N", "10"))
 
 DEFAULT_REPORT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report.md")
 
@@ -48,7 +56,18 @@ def _fmt_ago(ts: int | None, now: int | None = None) -> str:
     return f"{delta // 86400}д назад"
 
 
-def _fmt_item_md(a: dict[str, Any], is_drop: bool = False) -> list[str]:
+def _fmt_item_md(
+    a: dict[str, Any],
+    is_drop: bool = False,
+    *,
+    ctx: dict[str, Any] | None = None,
+) -> list[str]:
+    """
+    Отрисовать один лот в Markdown. ctx (опц.):
+    - 'medians': dict[(ar_bucket, n_event), float] — медианы FunPay;
+    - 'matches': dict[id -> list[other_lot]] — встречные совпадения.
+    Если ctx нет — вывод базовый (без дисконта и без аналогов).
+    """
     ar = a.get("ar", "?")
     price = a.get("price_rub")
     price_s = f"{price:.0f}₽" if isinstance(price, (int, float)) else "?"
@@ -63,8 +82,17 @@ def _fmt_item_md(a: dict[str, Any], is_drop: bool = False) -> list[str]:
     desc_short = desc[:180]
     url = a.get("url", "")
     ago = _fmt_ago(a.get("_created_ts") or a.get("_first_seen_ts"))
+
+    # Гл. 2: тег «🔥 -X% от рынка» в начале строки.
+    medians = (ctx or {}).get("medians") or {}
+    disc_prefix = ""
+    if medians:
+        disc = match.discount_pct(a, medians)
+        if disc is not None and disc >= HOT_DISCOUNT_THRESHOLD:
+            disc_prefix = f"🔥 -{disc:.0f}% от рынка · "
+
     lines: list[str] = []
-    head = f"- **AR{ar}** · **{price_s}**{tag} · {source} · server: {server}"
+    head = f"- {disc_prefix}**AR{ar}** · **{price_s}**{tag} · {source} · server: {server}"
     if ago:
         head += f" · 🕒 {ago}"
     if mail:
@@ -75,10 +103,51 @@ def _fmt_item_md(a: dict[str, Any], is_drop: bool = False) -> list[str]:
         lines.append(f"  - {desc_short}")
     if url:
         lines.append(f"  - {url}")
+
+    # Гл. 7: мини-тренд цены, если есть >=3 точки истории.
+    hist = a.get("_history") or []
+    if isinstance(hist, list) and len(hist) >= 3:
+        first = hist[0]
+        days = max(0, (int(time.time()) - int(first.get("ts", 0))) // 86400)
+        path = " → ".join(
+            f"{int(p['price'])}₽" for p in hist if isinstance(p.get("price"), (int, float))
+        )
+        if path and days > 0:
+            lines.append(f"  - 📈 за {days}д: {path}")
+
+    # Гл. 1: «🔁 На <other> аналоги:».
+    matches = (ctx or {}).get("matches") or {}
+    sid = str(a.get("id") or "")
+    sims = matches.get(sid) or []
+    if sims:
+        other_label = "FunPay" if source != "FunPay" else "PayGame"
+        lines.append(f"  - 🔁 На {other_label} аналоги:")
+        for o in sims:
+            op = o.get("price_rub")
+            ops = f"{op:.0f}₽" if isinstance(op, (int, float)) else "?"
+            j = o.get("_jaccard", 0.0)
+            ourl = o.get("url") or ""
+            lines.append(f"    - {ops} — {ourl} (jaccard {j:.2f})")
+
+    # Гл. 10: «🔗 дубль с другой площадки».
+    dups = (ctx or {}).get("dups") or {}
+    dup = dups.get(sid)
+    if dup:
+        durl = dup.get("url") or ""
+        dprice = dup.get("price_rub")
+        dps = f"{dprice:.0f}₽" if isinstance(dprice, (int, float)) else "?"
+        lines.append(f"  - 🔗 дубль с другой площадки: {durl} ({dps})")
     return lines
 
 
-def _section(title: str, new_items: list[dict[str, Any]], drops: list[dict[str, Any]], total_in_cat: int) -> list[str]:
+def _section(
+    title: str,
+    new_items: list[dict[str, Any]],
+    drops: list[dict[str, Any]],
+    total_in_cat: int,
+    *,
+    ctx: dict[str, Any] | None = None,
+) -> list[str]:
     lines: list[str] = []
     lines.append(f"### {title}")
     lines.append("")
@@ -92,13 +161,13 @@ def _section(title: str, new_items: list[dict[str, Any]], drops: list[dict[str, 
         lines.append("**🆕 Новые:**")
         lines.append("")
         for a in new_items:
-            lines.extend(_fmt_item_md(a))
+            lines.extend(_fmt_item_md(a, ctx=ctx))
         lines.append("")
     if drops:
         lines.append("**📉 Цена упала:**")
         lines.append("")
         for a in drops:
-            lines.extend(_fmt_item_md(a, is_drop=True))
+            lines.extend(_fmt_item_md(a, is_drop=True, ctx=ctx))
         lines.append("")
     if not new_items and not drops:
         lines.append("_ничего нового_")
@@ -106,7 +175,143 @@ def _section(title: str, new_items: list[dict[str, Any]], drops: list[dict[str, 
     return lines
 
 
-def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_at: str) -> str:
+def hot_pick(
+    fp_data: dict[str, Any],
+    pg_data: dict[str, Any],
+    medians: dict[tuple[int | None, int], float],
+    *,
+    threshold: float = HOT_TOP_THRESHOLD,
+    n: int = HOT_TOP_N,
+    include_existing: bool = False,
+) -> list[dict[str, Any]]:
+    """
+    Собрать самые «горячие» новые лоты с обоих источников.
+    Только из new_cat1/new_cat2 (иначе шапка дублирует общий список).
+    Сортировка — по дисконту DESC.
+
+    include_existing=True — заглядываем и в cat1/cat2 целиком (не только
+    new_*). Полезно, когда лот висит дешевле рынка несколько прогонов
+    подряд и хочется его всё равно видеть в шапке.
+    """
+    pool: list[dict[str, Any]] = []
+    if include_existing:
+        cats = ("cat1", "cat2")
+    else:
+        cats = ("new_cat1", "new_cat2")
+    for d, src in ((fp_data, "FunPay"), (pg_data, "PayGame")):
+        for cat in cats:
+            for lot in d.get(cat) or []:
+                disc = match.discount_pct(lot, medians)
+                if disc is None or disc < threshold:
+                    continue
+                pool.append({**lot, "_disc": disc, "_cat": cat, "_src": src})
+    # При include_existing один и тот же лот может попасть и в new_*, и в
+    # cat*. Дедупим по id+source — берём первый встреченный (он же со
+    # своим дисконтом, который не зависит от того откуда взяли).
+    seen_keys: set[tuple[str, str]] = set()
+    deduped: list[dict[str, Any]] = []
+    for h in pool:
+        key = (str(h.get("source") or h.get("_src") or ""), str(h.get("id") or ""))
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(h)
+    deduped.sort(key=lambda x: -x["_disc"])
+    return deduped[:n]
+
+
+def _format_hot_table(hot: list[dict[str, Any]]) -> list[str]:
+    """Markdown-таблица «🔥 Top-N hot lots»."""
+    if not hot:
+        return [
+            "## 🔥 Top hot lots",
+            "",
+            f"_сейчас горячих лотов нет (порог −{int(HOT_TOP_THRESHOLD)}%)._",
+            "",
+        ]
+    lines = ["## 🔥 Top hot lots", ""]
+    lines.append("| disc | source | AR | price | event 5★ | url |")
+    lines.append("|---|---|---|---|---|---|")
+    for h in hot:
+        ar = h.get("ar", "?")
+        price = h.get("price_rub")
+        ps = f"{price:.0f}₽" if isinstance(price, (int, float)) else "?"
+        _, chars, _ = match.fingerprint(h)
+        # Названия персонажей по-русски с большой буквы для читаемости.
+        chars_pretty = ", ".join(c.title() for c in sorted(chars)) or "—"
+        url = h.get("url", "") or ""
+        lines.append(
+            f"| -{h['_disc']:.0f}% | {h['_src']} | {ar} | {ps} | "
+            f"{chars_pretty} | {url} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _build_context(fp_data: dict[str, Any], pg_data: dict[str, Any]) -> dict[str, Any]:
+    """
+    Построить вспомогательный контекст для отчёта:
+    - medians: медианы FunPay по классу лота;
+    - matches_pg / matches_fp: словари id → [аналоги с другого источника].
+    """
+    fp_pool = (fp_data.get("cat1") or []) + (fp_data.get("cat2") or [])
+    pg_pool = (pg_data.get("cat1") or []) + (pg_data.get("cat2") or [])
+    medians = match.fp_median_by_class(fp_pool) if fp_pool else {}
+    matches_pg = match.build_matches(pg_pool, fp_pool) if fp_pool and pg_pool else {}
+    matches_fp = match.build_matches(fp_pool, pg_pool) if fp_pool and pg_pool else {}
+
+    # Гл. 10: дедуп между источниками. Строим словари
+    # «id → партнёрский лот с другого источника».
+    dup_pairs = match.find_cross_source_dups(fp_pool, pg_pool)
+    dups_fp: dict[str, dict[str, Any]] = {}
+    dups_pg: dict[str, dict[str, Any]] = {}
+    for f, p in dup_pairs:
+        fid, pid = str(f.get("id") or ""), str(p.get("id") or "")
+        if fid:
+            dups_fp[fid] = p
+        if pid:
+            dups_pg[pid] = f
+
+    return {
+        "medians": medians,
+        "matches_pg": matches_pg,
+        "matches_fp": matches_fp,
+        "dups_fp": dups_fp,
+        "dups_pg": dups_pg,
+        "dups_total": len(dup_pairs),
+    }
+
+
+def build_markdown(
+    fp_data: dict[str, Any],
+    pg_data: dict[str, Any],
+    generated_at: str,
+    *,
+    hot_only: bool = False,
+    hot_include_existing: bool = False,
+) -> str:
+    """
+    hot_only=True — в .md остаются только лоты с discount ≥ HOT_DISCOUNT_THRESHOLD
+    (всё остальное вырезается из new_/drop_ списков). Удобно для быстрого скана.
+
+    hot_include_existing=True — Top-N в шапке считается не только по новым лотам,
+    но и по всем cat1/cat2 целиком (включая «висящие» уже несколько прогонов).
+    """
+    if hot_only:
+        # Прорежем new_/drop_ обоих источников, оставив только горячее.
+        # Пробрасываем медианы из соседнего блока — нам нужен дисконт.
+        _ctx_for_filter = _build_context(fp_data, pg_data)
+        _meds = _ctx_for_filter["medians"]
+        for d in (fp_data, pg_data):
+            for key in ("new_cat1", "new_cat2", "drop_cat1", "drop_cat2"):
+                src = d.get(key) or []
+                kept = []
+                for lot in src:
+                    disc = match.discount_pct(lot, _meds)
+                    if disc is not None and disc >= HOT_DISCOUNT_THRESHOLD:
+                        kept.append(lot)
+                d[key] = kept
+    ctx_full = _build_context(fp_data, pg_data)
     lines: list[str] = []
     lines.append("# Genshin Accounts Monitor")
     lines.append("")
@@ -123,6 +328,17 @@ def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_a
     )
     lines.append("")
 
+    # Топ-блок с горячими лотами (см. главу 6 в docs/roadmap.md).
+    hot = hot_pick(
+        fp_data, pg_data, ctx_full["medians"],
+        include_existing=hot_include_existing,
+    )
+    lines.extend(_format_hot_table(hot))
+    if hot_only:
+        lines.append("_режим `--hot-only`: показаны только лоты с дисконтом "
+                     f"≥{int(HOT_DISCOUNT_THRESHOLD)}% от медианы рынка._")
+        lines.append("")
+
     any_first_run = False
     for label, data in (("FunPay", fp_data), ("PayGame", pg_data)):
         lines.append(f"## {label}")
@@ -135,20 +351,53 @@ def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_a
             )
             lines.append("")
             continue
+        # Какие matches подсунуть в ctx данной секции: для FunPay → PayGame-аналоги
+        # лежат в ctx_full["matches_fp"], и наоборот.
+        section_ctx = {
+            "medians": ctx_full["medians"],
+            "matches": ctx_full["matches_fp"] if label == "FunPay" else ctx_full["matches_pg"],
+            "dups": ctx_full["dups_fp"] if label == "FunPay" else ctx_full["dups_pg"],
+        }
         lines.extend(_section(
             f"cat1: AR {CAT1_AR_MIN}-{CAT1_AR_MAX}, ≤ {int(CAT1_MAX_PRICE)}₽",
             data["new_cat1"], data["drop_cat1"], len(data["cat1"]),
+            ctx=section_ctx,
         ))
         lines.extend(_section(
             f"cat2: AR {CAT2_AR_MIN}-{CAT2_AR_MAX}, ≤ {int(CAT2_MAX_PRICE)}₽, только с ивентовыми 5★",
             data["new_cat2"], data["drop_cat2"], len(data["cat2"]),
+            ctx=section_ctx,
         ))
+
+        # Гл. 8: блок «🛒 Похоже на свежие продажи».
+        sold = (data.get("sold_cat1") or []) + (data.get("sold_cat2") or [])
+        if sold:
+            # Самые «горячие продажи» — те, что недолго провисели.
+            now_ts = int(time.time())
+            for s in sold:
+                fs = s.get("first_seen") or 0
+                ls = s.get("last_seen") or now_ts
+                s["_lifetime_h"] = max(0, (int(ls) - int(fs)) // 3600) if fs else None
+            sold.sort(key=lambda x: x.get("_lifetime_h") or 10**9)
+            lines.append("**🛒 Похоже на свежие продажи (исчезли из выдачи):**")
+            lines.append("")
+            for s in sold[:10]:
+                pid = s.get("id", "?")
+                p = s.get("price")
+                ps = f"{p:.0f}₽" if isinstance(p, (int, float)) else "?"
+                lh = s.get("_lifetime_h")
+                lh_s = f"висел ~{lh}ч" if lh is not None else "висел ?"
+                lines.append(f"- id {pid} · {ps} · {lh_s}")
+            lines.append("")
+
         meta = (
             f"> 📊 всего сырых лотов {data['total_raw']}, "
             f"прошло фильтры: {len(data['cat1'])}+{len(data['cat2'])}"
         )
         if data.get("rentals_filtered"):
             meta += f" · аренд отсеяно: {data['rentals_filtered']}"
+        if sold:
+            meta += f" · похоже-продали: {len(sold)}"
         if not data.get("ok", True):
             meta += " · ⚠️ источник вернул ошибку (данные неполные)"
         if data.get("pruned"):
@@ -173,7 +422,11 @@ def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_a
             + len(pg_data.get("drop_cat1", []))
             + len(pg_data.get("drop_cat2", []))
         )
-        lines.append(f"_итого за прогон: **{total_new}** новых, **{total_drops}** подешевевших._")
+        line = f"_итого за прогон: **{total_new}** новых, **{total_drops}** подешевевших"
+        if ctx_full.get("dups_total"):
+            line += f", **{ctx_full['dups_total']}** дублей между источниками"
+        line += "._"
+        lines.append(line)
     lines.append("")
     return "\n".join(lines)
 
@@ -227,6 +480,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--open", action="store_true",
                         dest="open_after",
                         help="открыть отчёт в дефолтном приложении после генерации (Windows: start, macOS: open, Linux: xdg-open)")
+    parser.add_argument(
+        "--hot-only", action="store_true",
+        help=(
+            "оставить в .md только лоты с дисконтом ≥ GENSHIB_HOT_THRESHOLD "
+            "(по умолчанию 30%). Удобно для быстрого скана."
+        ),
+    )
+    parser.add_argument(
+        "--hot-include-existing", action="store_true",
+        help=(
+            "в Top-N hot lots в шапке учитывать не только новые лоты, "
+            "но и висящие в выдаче несколько прогонов подряд."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.debug:
         os.environ["GENSHIB_DEBUG"] = "1"
@@ -234,6 +501,7 @@ def main(argv: list[str] | None = None) -> int:
     empty = {
         "source": "", "total_raw": 0, "cat1": [], "cat2": [],
         "new_cat1": [], "new_cat2": [], "drop_cat1": [], "drop_cat2": [],
+        "sold_cat1": [], "sold_cat2": [],
         "first_run": False, "ok": True,
     }
     fp_data = dict(empty)
@@ -245,7 +513,31 @@ def main(argv: list[str] | None = None) -> int:
         pg_data = paygame_monitor.run(reset=args.reset)
 
     now_utc = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
-    md = build_markdown(fp_data, pg_data, now_utc)
+    md = build_markdown(
+        fp_data, pg_data, now_utc,
+        hot_only=args.hot_only,
+        hot_include_existing=args.hot_include_existing,
+    )
+
+    # Гл. 5: Telegram. Нотифицируем только если бот настроен через env;
+    # иначе notifier.send() молча ничего не делает.
+    try:
+        import notifier  # локальный импорт, чтоб тесты могли мокать env
+        ctx_local = _build_context(fp_data, pg_data)
+        hot_for_tg = hot_pick(
+            fp_data, pg_data, ctx_local["medians"],
+            threshold=float(os.environ.get("GENSHIB_TG_MIN_DISCOUNT", "30")),
+            n=int(os.environ.get("GENSHIB_TG_LIMIT", "10")),
+        )
+        # Прокидываем «красивые имена персонажей» в payload для TG.
+        for h in hot_for_tg:
+            _, chars, _ = match.fingerprint(h)
+            h["_chars_pretty"] = ", ".join(c.title() for c in sorted(chars))
+        ok_tg, msg_tg = notifier.send(hot_for_tg)
+        if not ok_tg and "no token" not in msg_tg:
+            print(f"[telegram] {msg_tg}", file=sys.stderr)
+    except Exception as e:  # никогда не валим основной флоу из-за TG
+        print(f"[telegram] {e}", file=sys.stderr)
 
     try:
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
