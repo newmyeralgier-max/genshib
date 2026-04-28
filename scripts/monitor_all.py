@@ -182,22 +182,42 @@ def hot_pick(
     *,
     threshold: float = HOT_TOP_THRESHOLD,
     n: int = HOT_TOP_N,
+    include_existing: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Собрать самые «горячие» новые лоты с обоих источников.
     Только из new_cat1/new_cat2 (иначе шапка дублирует общий список).
     Сортировка — по дисконту DESC.
+
+    include_existing=True — заглядываем и в cat1/cat2 целиком (не только
+    new_*). Полезно, когда лот висит дешевле рынка несколько прогонов
+    подряд и хочется его всё равно видеть в шапке.
     """
     pool: list[dict[str, Any]] = []
+    if include_existing:
+        cats = ("cat1", "cat2")
+    else:
+        cats = ("new_cat1", "new_cat2")
     for d, src in ((fp_data, "FunPay"), (pg_data, "PayGame")):
-        for cat in ("new_cat1", "new_cat2"):
+        for cat in cats:
             for lot in d.get(cat) or []:
                 disc = match.discount_pct(lot, medians)
                 if disc is None or disc < threshold:
                     continue
                 pool.append({**lot, "_disc": disc, "_cat": cat, "_src": src})
-    pool.sort(key=lambda x: -x["_disc"])
-    return pool[:n]
+    # При include_existing один и тот же лот может попасть и в new_*, и в
+    # cat*. Дедупим по id+source — берём первый встреченный (он же со
+    # своим дисконтом, который не зависит от того откуда взяли).
+    seen_keys: set[tuple[str, str]] = set()
+    deduped: list[dict[str, Any]] = []
+    for h in pool:
+        key = (str(h.get("source") or h.get("_src") or ""), str(h.get("id") or ""))
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(h)
+    deduped.sort(key=lambda x: -x["_disc"])
+    return deduped[:n]
 
 
 def _format_hot_table(hot: list[dict[str, Any]]) -> list[str]:
@@ -262,7 +282,35 @@ def _build_context(fp_data: dict[str, Any], pg_data: dict[str, Any]) -> dict[str
     }
 
 
-def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_at: str) -> str:
+def build_markdown(
+    fp_data: dict[str, Any],
+    pg_data: dict[str, Any],
+    generated_at: str,
+    *,
+    hot_only: bool = False,
+    hot_include_existing: bool = False,
+) -> str:
+    """
+    hot_only=True — в .md остаются только лоты с discount ≥ HOT_DISCOUNT_THRESHOLD
+    (всё остальное вырезается из new_/drop_ списков). Удобно для быстрого скана.
+
+    hot_include_existing=True — Top-N в шапке считается не только по новым лотам,
+    но и по всем cat1/cat2 целиком (включая «висящие» уже несколько прогонов).
+    """
+    if hot_only:
+        # Прорежем new_/drop_ обоих источников, оставив только горячее.
+        # Пробрасываем медианы из соседнего блока — нам нужен дисконт.
+        _ctx_for_filter = _build_context(fp_data, pg_data)
+        _meds = _ctx_for_filter["medians"]
+        for d in (fp_data, pg_data):
+            for key in ("new_cat1", "new_cat2", "drop_cat1", "drop_cat2"):
+                src = d.get(key) or []
+                kept = []
+                for lot in src:
+                    disc = match.discount_pct(lot, _meds)
+                    if disc is not None and disc >= HOT_DISCOUNT_THRESHOLD:
+                        kept.append(lot)
+                d[key] = kept
     ctx_full = _build_context(fp_data, pg_data)
     lines: list[str] = []
     lines.append("# Genshin Accounts Monitor")
@@ -281,8 +329,15 @@ def build_markdown(fp_data: dict[str, Any], pg_data: dict[str, Any], generated_a
     lines.append("")
 
     # Топ-блок с горячими лотами (см. главу 6 в docs/roadmap.md).
-    hot = hot_pick(fp_data, pg_data, ctx_full["medians"])
+    hot = hot_pick(
+        fp_data, pg_data, ctx_full["medians"],
+        include_existing=hot_include_existing,
+    )
     lines.extend(_format_hot_table(hot))
+    if hot_only:
+        lines.append("_режим `--hot-only`: показаны только лоты с дисконтом "
+                     f"≥{int(HOT_DISCOUNT_THRESHOLD)}% от медианы рынка._")
+        lines.append("")
 
     any_first_run = False
     for label, data in (("FunPay", fp_data), ("PayGame", pg_data)):
@@ -425,6 +480,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--open", action="store_true",
                         dest="open_after",
                         help="открыть отчёт в дефолтном приложении после генерации (Windows: start, macOS: open, Linux: xdg-open)")
+    parser.add_argument(
+        "--hot-only", action="store_true",
+        help=(
+            "оставить в .md только лоты с дисконтом ≥ GENSHIB_HOT_THRESHOLD "
+            "(по умолчанию 30%). Удобно для быстрого скана."
+        ),
+    )
+    parser.add_argument(
+        "--hot-include-existing", action="store_true",
+        help=(
+            "в Top-N hot lots в шапке учитывать не только новые лоты, "
+            "но и висящие в выдаче несколько прогонов подряд."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.debug:
         os.environ["GENSHIB_DEBUG"] = "1"
@@ -444,7 +513,11 @@ def main(argv: list[str] | None = None) -> int:
         pg_data = paygame_monitor.run(reset=args.reset)
 
     now_utc = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
-    md = build_markdown(fp_data, pg_data, now_utc)
+    md = build_markdown(
+        fp_data, pg_data, now_utc,
+        hot_only=args.hot_only,
+        hot_include_existing=args.hot_include_existing,
+    )
 
     # Гл. 5: Telegram. Нотифицируем только если бот настроен через env;
     # иначе notifier.send() молча ничего не делает.

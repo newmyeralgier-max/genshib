@@ -120,6 +120,66 @@ class TestBuildMarkdown(unittest.TestCase):
         md = monitor_all.build_markdown(fp_data, pg_data, "2025-01-01 00:00")
         self.assertIn("горячих лотов нет", md)
 
+    def test_hot_only_filters_new_and_drops(self) -> None:
+        """--hot-only оставляет только лоты с дисконтом >= порога."""
+        base = [_lot(f"f{i}", 55, "Скирк + Ху Тао", 1000) for i in range(5)]
+        cold = _lot("cold", 55, "Скирк + Ху Тао", 900)  # -10%
+        warm = _lot("hot", 55, "Скирк + Ху Тао", 500)  # -50%
+        fp_data = {
+            "source": "FunPay", "total_raw": 100,
+            "cat1": base + [cold, warm], "cat2": [],
+            "new_cat1": [cold, warm], "new_cat2": [],
+            "drop_cat1": [], "drop_cat2": [],
+            "first_run": False, "ok": True,
+        }
+        pg_data = {
+            "source": "PayGame", "total_raw": 0,
+            "cat1": [], "cat2": [],
+            "new_cat1": [], "new_cat2": [],
+            "drop_cat1": [], "drop_cat2": [],
+            "first_run": False, "ok": True,
+        }
+        md = monitor_all.build_markdown(
+            fp_data, pg_data, "2025-01-01 00:00", hot_only=True,
+        )
+        self.assertIn("--hot-only", md)
+        self.assertIn("example.com/hot", md)
+        self.assertNotIn("example.com/cold", md)
+
+
+class TestHotIncludeExisting(unittest.TestCase):
+    def test_picks_existing_when_flag_on(self) -> None:
+        medians = {(55, 2): 1000.0}
+        old_hot = _lot("old", 55, "Скирк + Ху Тао", 100)
+        fp_data = {
+            "new_cat1": [], "new_cat2": [],
+            "cat1": [old_hot], "cat2": [],
+        }
+        pg_data = {"new_cat1": [], "new_cat2": [], "cat1": [], "cat2": []}
+        out_default = monitor_all.hot_pick(
+            fp_data, pg_data, medians, threshold=20.0, n=10,
+        )
+        self.assertEqual(out_default, [])
+        out_inc = monitor_all.hot_pick(
+            fp_data, pg_data, medians, threshold=20.0, n=10,
+            include_existing=True,
+        )
+        self.assertEqual([h["id"] for h in out_inc], ["old"])
+
+    def test_dedups_when_lot_in_both_cat_and_new(self) -> None:
+        medians = {(55, 2): 1000.0}
+        h = _lot("dup", 55, "Скирк + Ху Тао", 100)
+        fp_data = {
+            "new_cat1": [h], "new_cat2": [],
+            "cat1": [h], "cat2": [],
+        }
+        pg_data = {"new_cat1": [], "new_cat2": [], "cat1": [], "cat2": []}
+        out = monitor_all.hot_pick(
+            fp_data, pg_data, medians, threshold=20.0, n=10,
+            include_existing=True,
+        )
+        self.assertEqual([x["id"] for x in out], ["dup"])
+
 
 if __name__ == "__main__":
     unittest.main()

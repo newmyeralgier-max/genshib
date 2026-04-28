@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -138,25 +139,49 @@ def send(
     if os.environ.get(ENV_DRY) == "1":
         return True, f"[dry] {text}"
 
-    try:
-        req = urllib.request.Request(api, data=payload, method="POST")
-        with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
-            body = resp.read().decode("utf-8", "replace")
-            try:
-                parsed = json.loads(body)
-                ok = bool(parsed.get("ok"))
-            except Exception:
-                ok = False
-            return ok, f"http {resp.status}: {body[:200]}"
-    except urllib.error.HTTPError as e:  # type: ignore[name-defined]
-        # 400 = «can't parse entities» (баг экранирования) — важно увидеть body.
+    # До 2 ретраев на сетевые ошибки + специально на 429 (rate limit) —
+    # в этом случае Telegram сам говорит retry_after секунд в JSON ответе.
+    last_err = ""
+    for attempt in range(3):
         try:
-            body = e.read().decode("utf-8", "replace")
-        except Exception:
-            body = ""
-        return False, f"send error http {e.code}: {body[:200]}"
-    except Exception as e:
-        return False, f"send error: {e}"
+            req = urllib.request.Request(api, data=payload, method="POST")
+            with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
+                body = resp.read().decode("utf-8", "replace")
+                try:
+                    parsed = json.loads(body)
+                    ok = bool(parsed.get("ok"))
+                except Exception:
+                    ok = False
+                return ok, f"http {resp.status}: {body[:200]}"
+        except urllib.error.HTTPError as e:  # type: ignore[name-defined]
+            # 400 = «can't parse entities» (баг экранирования) — важно увидеть body.
+            try:
+                body = e.read().decode("utf-8", "replace")
+            except Exception:
+                body = ""
+            # 429 = rate limit. Telegram кладёт retry_after в parameters
+            # (секунды). Спим ровно столько и ретраим.
+            if e.code == 429 and attempt < 2:
+                wait = 1.0
+                try:
+                    parsed = json.loads(body)
+                    wait = float(parsed.get("parameters", {}).get("retry_after", 1.0))
+                except Exception:
+                    pass
+                # Жёсткий потолок — не вешаем основной флоу на минуты.
+                wait = min(max(wait, 0.0), 30.0)
+                time.sleep(wait)
+                last_err = f"http 429: {body[:120]} (retried after {wait:g}s)"
+                continue
+            return False, f"send error http {e.code}: {body[:200]}"
+        except Exception as e:
+            # Сетевые таймауты — короткий backoff.
+            last_err = f"send error: {e}"
+            if attempt < 2:
+                time.sleep(1.0 + attempt)
+                continue
+            return False, last_err
+    return False, last_err
 
 
 __all__ = ["format_message", "md_escape", "send"]
