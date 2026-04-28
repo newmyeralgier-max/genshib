@@ -104,15 +104,52 @@ EVENT_5STAR_GROUPS: tuple[tuple[str, ...], ...] = (
     ("лаум", "laum"),
 )
 
-# Плоский набор для has_event_5star() — back-compat.
-EVENT_5STAR: frozenset[str] = frozenset(
-    alias for group in EVENT_5STAR_GROUPS for alias in group
-)
+# --- Толерантные алиасы (FunPay edge-case) ---------------------------
+# На FunPay часть продавцов пишет описания так, что первая буква имени
+# персонажа ВИЗУАЛЬНО заменена эмодзи (и в HTML тоже её нет):
+#   «Аяка⭐итлали⭐урина⭐ахида»  =  «Аяка ⭐ Ситлали ⭐ Фурина ⭐ Нахида»
+# Без специальной обработки fingerprint() пропускает этих персонажей.
+# Решение: для каждого алиаса длиной >= 5 русских букв добавляем вариант
+# с откушенной первой буквой («ситлали»→«итлали», «фурина»→«урина»),
+# и маппим его на тот же канонический. Английские алиасы НЕ режем
+# (англ. слова заметно короче и часто конфликтуют с обычными словами).
+# Алиасы короче 5 букв тоже не трогаем — слишком высокий шанс ложных
+# совпадений (например, «сяо»→«яо» матчилось бы внутри «яой»).
+def _has_cyrillic(s: str) -> bool:
+    return any("\u0400" <= ch <= "\u04ff" for ch in s)
 
-# alias → canonical_name (первое имя в группе).
-EVENT_5STAR_CANONICAL: dict[str, str] = {
-    alias: group[0] for group in EVENT_5STAR_GROUPS for alias in group
-}
+
+def _build_5star_canonical() -> tuple[frozenset[str], dict[str, str]]:
+    flat: set[str] = set()
+    canonical: dict[str, str] = {}
+    for group in EVENT_5STAR_GROUPS:
+        primary = group[0]
+        for alias in group:
+            flat.add(alias)
+            canonical[alias] = primary
+    # Второй проход — толерантные варианты (откушенная 1-я буква).
+    # Делаем после основного, чтобы не перезатереть прямые алиасы.
+    # Минимум 4 буквы у trimmed: это даёт «яка»→Аяка, «линс»→Флинс,
+    # но отсекает 3-буквенные хвосты типа «яо» от Сяо (слишком частый
+    # обрывок других слов).
+    for group in EVENT_5STAR_GROUPS:
+        primary = group[0]
+        for alias in group:
+            if not _has_cyrillic(alias):
+                continue
+            if len(alias) < 5:
+                continue
+            trimmed = alias[1:]
+            if len(trimmed) < 4:
+                continue
+            if trimmed in canonical:  # коллизия с другим алиасом — пропускаем
+                continue
+            flat.add(trimmed)
+            canonical[trimmed] = primary
+    return frozenset(flat), canonical
+
+
+EVENT_5STAR, EVENT_5STAR_CANONICAL = _build_5star_canonical()
 
 # --- стоп-слова мусора ----------------------------------------------
 # Эти фразы встречаются в "договорная цена" заглушках (2₽),

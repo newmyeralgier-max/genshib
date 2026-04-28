@@ -44,6 +44,24 @@ class TestFingerprint(unittest.TestCase):
         self.assertIn("фурина", chars)
         self.assertIn("ху тао", chars)
 
+    def test_funpay_emoji_eats_first_letter(self) -> None:
+        """FunPay-конвенция: «Аяка⭐итлали⭐урина» = «Аяка ⭐ Ситлали ⭐ Фурина».
+
+        Без толерантного варианта алиасов (откушенная 1-я буква) мы бы
+        пропустили Ситлали и Фурину — а это самые частые имена в FunPay.
+        """
+        b, chars, n = match.fingerprint({
+            "ar": 58,
+            "desc": "AR58 Аяка⭐итлали⭐урина⭐ахида⭐лоринда",
+        })
+        # 5 героев — ничего не пропущено
+        self.assertEqual(n, 5)
+        self.assertIn("аяка", chars)
+        self.assertIn("ситлали", chars)
+        self.assertIn("фурина", chars)
+        self.assertIn("нахида", chars)
+        self.assertIn("клоринда", chars)
+
     def test_jaccard_consistent_across_languages(self) -> None:
         """Лот «Skirk» и лот «Скирк» должны иметь jaccard=1.0."""
         _, ca, _ = match.fingerprint({"ar": 55, "desc": "skirk"})
